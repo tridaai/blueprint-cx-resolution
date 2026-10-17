@@ -71,6 +71,11 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("store", 2), ("opening hours", 4), ("open on", 2),
         ("thank you", 1), ("thanks", 1), ("hello", 1), ("hi there", 1),
         ("compliment", 3), ("feedback", 2),
+        # A complaint is the care desk's record, wherever it is
+        # about — weighted to beat a passing mention of the thing
+        # complained about (a complaint about a bill is a complaint
+        # record; a wrong charge is the billing desk's dispute).
+        ("complaint", 5), ("complain", 4),
     ],
 }
 
