@@ -159,6 +159,13 @@ class Account(BaseModel):
     pending_plan_id: str | None = None
     pending_plan_effective: str = ""  # ISO date
     open_case: str | None = None
+    # Accessibility and contact preference, recorded at the care
+    # desk from the customer's own words (care_book): the note is
+    # what they said, the preference is the derived instruction
+    # ("large print", "email", "text message") later contacts
+    # honour. Empty until the customer states a need.
+    accessibility_note: str = ""
+    preferred_contact: str = ""
 
 
 class PolicyDocument(BaseModel):
@@ -493,6 +500,43 @@ class PaymentNotice(BaseModel):
     created_date: str = ""  # ISO date
 
 
+class ComplaintRecord(BaseModel):
+    """A complaint as a record of its own — the care desk's sibling
+    of the dispute case. Written the moment the complaint is
+    recognised, with the customer's words verbatim, a category from
+    the governed list, and the response deadline policy promises
+    (acknowledged in the conversation at once; the substantive
+    response is a person's, due by `response_due`). The SLA watch
+    (care_book.complaint_watch) reads these records: a complaint
+    still open past its deadline is breached, and the watch raises
+    it to the escalation queue — `sla_escalation_id` is that queue
+    entry, set once."""
+
+    complaint_id: str
+    conversation_id: str = ""
+    account_number: str = ""  # "" when the customer never identified
+    category: str = "other"  # the governed list lives in care_book
+    text: str = ""  # the customer's words, verbatim
+    status: str = "open"  # open | responded | closed
+    created_date: str = ""  # ISO date
+    response_due: str = ""  # ISO date the substantive response is due
+    sla_escalation_id: str = ""  # the watch's queue entry, once raised
+
+
+class FeedbackRecord(BaseModel):
+    """A compliment or a piece of general feedback, recorded the
+    moment it's recognised — data the business mines, not
+    conversation filler. The customer's words ride verbatim; the
+    kind is the category (compliment | feedback)."""
+
+    record_id: str
+    conversation_id: str = ""
+    account_number: str = ""
+    kind: str = "feedback"  # compliment | feedback
+    text: str = ""  # the customer's words, verbatim
+    created_date: str = ""  # ISO date
+
+
 class Finding(BaseModel):
     """One structured fact a specialist established with a tool. The
     supervisor's reply may only assert what findings (or retrieved
@@ -539,6 +583,10 @@ class HandoffPacket(BaseModel):
     queue: str  # general | billing | fraud | vulnerable_care
     reason: str
     identity_state: str
+    # The account carries a vulnerability flag (seeded, or set from
+    # the customer's own plainly stated circumstances in this
+    # conversation) — the human sees it without digging.
+    vulnerable: bool = False
     customer_name: str = ""
     account_number: str = ""
     summary: str

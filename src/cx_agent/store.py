@@ -46,10 +46,12 @@ from .models import (
     AuditEvent,
     Bill,
     CallbackRecord,
+    ComplaintRecord,
     Conversation,
     Customer,
     DisputeCase,
     Escalation,
+    FeedbackRecord,
     Offer,
     PaymentArrangement,
     PaymentAttempt,
@@ -159,6 +161,15 @@ class Store(Protocol):
     def save_payment_notice(self, n: PaymentNotice) -> None: ...
     def list_payment_notices(self, account_number: str | None = None
                              ) -> list[PaymentNotice]: ...
+    def save_complaint(self, c: ComplaintRecord) -> None: ...
+    def get_complaint(self, complaint_id: str) -> ComplaintRecord | None: ...
+    def list_complaints(self, conversation_id: str | None = None,
+                        account_number: str | None = None
+                        ) -> list[ComplaintRecord]: ...
+    def save_feedback(self, f: FeedbackRecord) -> None: ...
+    def list_feedback(self, conversation_id: str | None = None,
+                      account_number: str | None = None
+                      ) -> list[FeedbackRecord]: ...
 
     # conversation records
     def save_conversation(self, c: Conversation) -> None: ...
@@ -197,6 +208,8 @@ class InMemoryStore:
         self.payment_attempts: dict[str, PaymentAttempt] = {}
         self.payment_arrangements: dict[str, PaymentArrangement] = {}
         self.payment_notices: dict[str, PaymentNotice] = {}
+        self.complaints: dict[str, ComplaintRecord] = {}
+        self.feedback: dict[str, FeedbackRecord] = {}
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
@@ -348,6 +361,28 @@ class InMemoryStore:
             rows = [n for n in rows if n.account_number == account_number]
         return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
 
+    def save_complaint(self, c): self._put(self.complaints, c.complaint_id, c)
+    def get_complaint(self, complaint_id):
+        return self._get(self.complaints, complaint_id)
+
+    def list_complaints(self, conversation_id=None, account_number=None):
+        rows = self._all(self.complaints)
+        if conversation_id:
+            rows = [c for c in rows if c.conversation_id == conversation_id]
+        if account_number:
+            rows = [c for c in rows if c.account_number == account_number]
+        return sorted(rows, key=lambda c: (c.created_date, c.complaint_id))
+
+    def save_feedback(self, f): self._put(self.feedback, f.record_id, f)
+
+    def list_feedback(self, conversation_id=None, account_number=None):
+        rows = self._all(self.feedback)
+        if conversation_id:
+            rows = [f for f in rows if f.conversation_id == conversation_id]
+        if account_number:
+            rows = [f for f in rows if f.account_number == account_number]
+        return sorted(rows, key=lambda f: (f.created_date, f.record_id))
+
     def save_conversation(self, c): self._put(self.conversations, c.conversation_id, c)
     def get_conversation(self, cid): return self._get(self.conversations, cid)
     def list_conversations(self): return self._all(self.conversations)
@@ -405,6 +440,8 @@ _TABLES = {
     "payment_attempts": ("attempt_id", PaymentAttempt),
     "payment_arrangements": ("arrangement_id", PaymentArrangement),
     "payment_notices": ("notice_id", PaymentNotice),
+    "complaints": ("complaint_id", ComplaintRecord),
+    "feedback_records": ("record_id", FeedbackRecord),
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
@@ -575,6 +612,29 @@ class _SqlStore:
         if account_number:
             rows = [n for n in rows if n.account_number == account_number]
         return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
+
+    def save_complaint(self, c): self._save("complaints", c.complaint_id, c)
+    def get_complaint(self, complaint_id):
+        return self._load("complaints", complaint_id)
+
+    def list_complaints(self, conversation_id=None, account_number=None):
+        rows = self._load_all("complaints")
+        if conversation_id:
+            rows = [c for c in rows if c.conversation_id == conversation_id]
+        if account_number:
+            rows = [c for c in rows if c.account_number == account_number]
+        return sorted(rows, key=lambda c: (c.created_date, c.complaint_id))
+
+    def save_feedback(self, f):
+        self._save("feedback_records", f.record_id, f)
+
+    def list_feedback(self, conversation_id=None, account_number=None):
+        rows = self._load_all("feedback_records")
+        if conversation_id:
+            rows = [f for f in rows if f.conversation_id == conversation_id]
+        if account_number:
+            rows = [f for f in rows if f.account_number == account_number]
+        return sorted(rows, key=lambda f: (f.created_date, f.record_id))
 
     def save_conversation(self, c): self._save("conversations", c.conversation_id, c)
     def get_conversation(self, cid): return self._load("conversations", cid)
