@@ -95,6 +95,16 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
             return blocked("credit_above_cap")
         if proposal.amount <= 0:
             return blocked("credit_not_positive")
+        if proposal.payload.get("credit_class") == "goodwill":
+            # The rolling cap is re-read at execution, not trusted
+            # from proposal time: goodwill already applied inside
+            # the window plus this credit may not pass it.
+            from .billing_book import credit_history
+
+            history = credit_history(store, account.account_number, policy)
+            if history.executed_total + proposal.amount \
+                    > policy.goodwill_rolling_cap:
+                return blocked("goodwill_rolling_cap_reached")
         account.balance_due = max(Decimal("0"), account.balance_due - proposal.amount)
         store.save_account(account)
 
