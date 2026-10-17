@@ -1149,6 +1149,78 @@ def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
         failure_lead = [notice.summary if notice is not None
                         else payments_book.diagnosis_text(attempt)]
 
+    if "refund" in lowered or (state.get("refund_open") and any(
+            w in lowered for w in ("card on file", "method on file",
+                                   "send it back", "to the card"))):
+        if acct is None:
+            return _needs_identity("account", _IDENTITY_ASK)
+        credit = acct.credit_balance
+        if credit <= 0:
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="refund_none",
+                    text=("There's no credit balance on your account "
+                          "— nothing is owed back right now. If a "
+                          "payment has left your bank twice, the "
+                          "second one may still be settling; what "
+                          f"shows here is a balance of "
+                          f"{fmt(acct.balance_due)} due."))],
+                citations=_cite(ctx, "payments", "refund overpayment"),
+                progress=True)
+        digits = [d for d in re.findall(r"(?<!\d)(\d{4})(?!\d)", text)
+                  if d != acct.payment_method_last4]
+        foreign = bool(digits) or any(w in lowered for w in (
+            "bank account", "bank transfer", "cheque", "another card",
+            "different card", "new card", "cash"))
+        if foreign:
+            # The refund stays open on the corrected destination:
+            # the customer's next message ("the card on file")
+            # belongs to this branch, not the card-update branch.
+            state["refund_open"] = True
+            named = ("a bank account"
+                     if any(w in lowered for w in
+                            ("bank account", "bank transfer"))
+                     else "another card" if digits or "card" in lowered
+                     else "a different destination")
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="refund_destination_refused",
+                    text=(f"I can't send a refund to {named}. "
+                          "Refunds go back to the payment method on "
+                          f"your account — the card ending "
+                          f"{acct.payment_method_last4} — and nowhere "
+                          "else; that's a fraud-protection rule and "
+                          "it applies every time. The amount owed "
+                          f"back to you is {fmt(credit)}. Say the "
+                          "word and I'll send it to the card ending "
+                          f"{acct.payment_method_last4}."))],
+                citations=_cite(ctx, "payments",
+                                "refund payment method on file fraud"),
+                progress=True)
+        state["refund_open"] = False
+        return SpecialistResult(
+            specialist="account",
+            findings=[Finding(
+                topic="refund",
+                text=(f"You're owed {fmt(credit)} back — it sits on "
+                      "your account as a credit balance. Refunds go "
+                      f"to the card ending {acct.payment_method_last4} "
+                      "on your account."))],
+            proposed_action=ProposedAction(
+                kind=ActionKind.REFUND_PAYMENT,
+                summary=(f"refund {fmt(credit)} to the card ending "
+                         f"{acct.payment_method_last4}"),
+                payload={"amount": str(credit),
+                         "method_last4": acct.payment_method_last4 or ""},
+                amount=credit,
+                basis="Credit balance on the account; refunds go "
+                      "to the method on file only (POL-PAY-03)."),
+            citations=_cite(ctx, "payments",
+                            "refund payment method on file fraud"),
+            progress=True)
+
     if any(w in lowered for w in ("card", "payment method", "direct debit")):
         from .identity import is_verified
         if not is_verified(conv):
@@ -1309,71 +1381,6 @@ def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                       "the method on file (POL-PAY-03)."),
             citations=_cite(ctx, "payments", "pay balance card on file"),
             must_include=failure_lead,
-            progress=True)
-
-    if "refund" in lowered:
-        if acct is None:
-            return _needs_identity("account", _IDENTITY_ASK)
-        credit = acct.credit_balance
-        if credit <= 0:
-            return SpecialistResult(
-                specialist="account",
-                findings=[Finding(
-                    topic="refund_none",
-                    text=("There's no credit balance on your account "
-                          "— nothing is owed back right now. If a "
-                          "payment has left your bank twice, the "
-                          "second one may still be settling; what "
-                          f"shows here is a balance of "
-                          f"{fmt(acct.balance_due)} due."))],
-                citations=_cite(ctx, "payments", "refund overpayment"),
-                progress=True)
-        digits = [d for d in re.findall(r"(?<!\d)(\d{4})(?!\d)", text)
-                  if d != acct.payment_method_last4]
-        foreign = bool(digits) or any(w in lowered for w in (
-            "bank account", "bank transfer", "cheque", "another card",
-            "different card", "new card", "cash"))
-        if foreign:
-            named = ("a bank account"
-                     if any(w in lowered for w in
-                            ("bank account", "bank transfer"))
-                     else "another card" if digits or "card" in lowered
-                     else "a different destination")
-            return SpecialistResult(
-                specialist="account",
-                findings=[Finding(
-                    topic="refund_destination_refused",
-                    text=(f"I can't send a refund to {named}. "
-                          "Refunds go back to the payment method on "
-                          f"your account — the card ending "
-                          f"{acct.payment_method_last4} — and nowhere "
-                          "else; that's a fraud-protection rule and "
-                          "it applies every time. The amount owed "
-                          f"back to you is {fmt(credit)}. Say the "
-                          "word and I'll send it to the card ending "
-                          f"{acct.payment_method_last4}."))],
-                citations=_cite(ctx, "payments",
-                                "refund payment method on file fraud"),
-                progress=True)
-        return SpecialistResult(
-            specialist="account",
-            findings=[Finding(
-                topic="refund",
-                text=(f"You're owed {fmt(credit)} back — it sits on "
-                      "your account as a credit balance. Refunds go "
-                      f"to the card ending {acct.payment_method_last4} "
-                      "on your account."))],
-            proposed_action=ProposedAction(
-                kind=ActionKind.REFUND_PAYMENT,
-                summary=(f"refund {fmt(credit)} to the card ending "
-                         f"{acct.payment_method_last4}"),
-                payload={"amount": str(credit),
-                         "method_last4": acct.payment_method_last4 or ""},
-                amount=credit,
-                basis="Credit balance on the account; refunds go "
-                      "to the method on file only (POL-PAY-03)."),
-            citations=_cite(ctx, "payments",
-                            "refund payment method on file fraud"),
             progress=True)
 
     if any(w in lowered for w in ("autopay", "auto pay",

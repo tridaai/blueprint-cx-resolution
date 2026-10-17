@@ -173,6 +173,67 @@ def test_procedure_versions_runs_and_callbacks(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_payment_records(kind, tmp_path):
+    """Round 7 records behave identically on every store: attempts
+    keep their order and their Decimal amounts, arrangements
+    round-trip with their installments, notices with their text."""
+    from cx_agent.models import (
+        ArrangementInstallment,
+        PaymentArrangement,
+        PaymentAttempt,
+        PaymentNotice,
+    )
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+
+    store.save_payment_attempt(PaymentAttempt(
+        attempt_id="ATT-T1", conversation_id="CONV-T",
+        account_number="NB-T", method_last4="1234",
+        amount=Decimal("45.00"), outcome="declined",
+        reason_code="insufficient_funds", decline_class="soft",
+        source="manual", created_date="2026-10-01"))
+    store.save_payment_attempt(PaymentAttempt(
+        attempt_id="ATT-T2", conversation_id="CONV-T",
+        account_number="NB-T", method_last4="1234",
+        amount=Decimal("45.00"), outcome="approved",
+        source="manual", created_date="2026-10-01"))
+    rows = store.list_payment_attempts("NB-T")
+    assert [t.attempt_id for t in rows] == ["ATT-T1", "ATT-T2"]
+    assert rows[0].amount == Decimal("45.00")
+    assert rows[0].decline_class == "soft"
+    assert store.list_payment_attempts("NB-OTHER") == []
+    assert len(store.list_payment_attempts(conversation_id="CONV-T")) == 2
+
+    arrangement = PaymentArrangement(
+        arrangement_id="ARR-T1", conversation_id="CONV-T",
+        account_number="NB-T", total=Decimal("100.00"),
+        installments=[ArrangementInstallment(
+            number=1, amount=Decimal("33.34"), due_date="2026-10-15"),
+            ArrangementInstallment(
+                number=2, amount=Decimal("33.33"), due_date="2026-11-14")],
+        state="active", created_date="2026-10-01")
+    store.save_payment_arrangement(arrangement)
+    loaded = store.get_payment_arrangement("ARR-T1")
+    assert loaded.total == Decimal("100.00")
+    assert loaded.installments[0].amount == Decimal("33.34")
+    assert [a.arrangement_id for a in
+            store.list_payment_arrangements("NB-T")] == ["ARR-T1"]
+    assert store.get_payment_arrangement("ARR-NONE") is None
+
+    store.save_payment_notice(PaymentNotice(
+        notice_id="NTF-T9", account_number="NB-T", kind="autopay_failed",
+        amount=Decimal("45.00"), method_last4="1234",
+        reason_code="insufficient_funds", summary="Autopay failed…",
+        created_date="2026-10-01"))
+    notices = store.list_payment_notices("NB-T")
+    assert len(notices) == 1 and notices[0].amount == Decimal("45.00")
+    assert store.list_payment_notices("NB-OTHER") == []
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
 def test_roaming_rates_and_notices(kind, tmp_path):
     """Round 6 records behave identically on every store: rates
     key on the destination (case-insensitively), and notices
