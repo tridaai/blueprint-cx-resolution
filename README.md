@@ -230,26 +230,42 @@ open http://localhost:8000              # the operator console
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **71 scripted multi-turn conversations** played by
-persona drivers (the refund seeker, the human-demander, the
-fragment writer, the AI skeptic, the confused elder, non-native
-phrasing) against the real service, graded with pass/fail rubric
+behavioral: **117 scripted multi-turn conversations** played
+against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care. The gate requires **100% on zero-tolerance
-assertions** (escalation decisions, whether an action executed,
-exact money and identity state) and **≥95% overall**. Current
-state of the tree: 532/532 assertions, 355/355 zero-tolerance.
+identity, care. Seventy-one are hand-written persona trajectories
+(the refund seeker, the human-demander, the fragment writer, the
+AI skeptic, the confused elder, non-native phrasing). Thirty-five
+more are the **persona matrix**: seven difficult-customer
+archetypes (confused and repetitive, terse, rambling, non-native,
+mind-changing, wall-of-text, careful elderly) generated across
+five core flows, each pair grading the identical outcome — same
+money to the cent, same executed actions — because how a
+customer talks must not change what the agent does. The last
+eleven are an **adversarial set** — prompt injection, impersonation,
+social engineering, and cross-account probes — graded
+zero-tolerance as a set. The gate requires **100% on
+zero-tolerance assertions** (escalation decisions, whether an
+action executed, exact money and identity state), **≥95%
+overall**, and a clean adversarial set; the report breaks down
+by rubric, by persona, and by attack class. Current state of
+the tree: 1027/1027 assertions, 758/758 zero-tolerance. The
+matrix found a real defect on its first run — a hesitant
+"um, yes I think so" silently destroyed pending decisions at
+two decision points; both now re-ask instead, and the matrix
+is the regression proof.
 
 ```bash
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (182 tests) covers the deterministic core —
+The pytest suite (187 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
-transactions, care records and the mining pass, store conformance
-across the SQLite and in-memory profiles (the PostgreSQL leg
-runs when `CX_TEST_DATABASE_URL` names a scratch database).
+transactions, care records and the mining pass, the confirmation
+re-ask regressions, store conformance across the SQLite and
+in-memory profiles (the PostgreSQL leg runs when
+`CX_TEST_DATABASE_URL` names a scratch database).
 
 ## Layout
 
@@ -289,7 +305,9 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (71 trajectories) + run_evals.py
+evals/             scenarios.jsonl (71 trajectories) + personas.py
+                   (the 35-scenario matrix) + adversarial.jsonl
+                   (11 attacks) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```

@@ -72,7 +72,14 @@ Nodes, in turn order:
   `routing.py`). Confirming a consequential action while
   unverified detours into the identity flow and re-asks the
   confirmation afterwards — verification never silently satisfies
-  a confirmation given before it.
+  a confirmation given before it. An "other" reply with no desk
+  signal at all ("um, yes I think so") is an unread answer, not
+  a new topic: the proposal stays open and the question is
+  re-asked, rather than the turn routing to another desk and
+  the reroute retiring the proposal unanswered (round 9 — the
+  roaming guard applies the same rule to its deferred decision).
+  A reply carrying any real signal still routes, and a desk
+  change still retires.
 - **route** — the phrase-table router, read as evidence
   (`routing.analyze`): matched signals, the leaders, the runner-up.
   A live procedure owns short outcome replies ("still nothing")
@@ -508,12 +515,15 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 71 scripted
+The eval pack grades trajectories, not replies: 117 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
 the escalation queue, the reroute audit count, action-record
-statuses). The trajectories include the round-2 desk discipline:
+statuses). Seventy-one are hand-written; the rest are generated
+and attacked (round 9, below). The report breaks the results
+down by rubric, by persona, and by adversarial class, so a
+regression localises to a customer style or an attack type. The trajectories include the round-2 desk discipline:
 a proposal retired by a reroute and never executed, verification
 surviving a change of desk, a clarification resolved by its
 answer and one ignored and committed on without a second
@@ -550,7 +560,28 @@ contact, an explicit vulnerability statement that sets the flag
 and routes to the care queue with the flag in the packet, a
 hinted one that sets nothing, and a planted set of repeated
 unhandled asks surfacing as one mined candidate with the right
-count. The rubrics encode the
+count. Round 9 adds the persona matrix and the adversarial set.
+The matrix (`evals/personas.py`) applies seven persona
+archetypes — confused and repetitive, terse, rambling, non-native,
+mind-changing, wall-of-text, careful elderly — to five core flows
+and grades the identical invariants per pair: how a customer talks
+must not change what the agent does. The adversarial set
+(`evals/adversarial.jsonl`) works four attack classes —
+injection (a fake system notice in a dispute, a fake email, a
+prompt-extraction attempt, a claimed staff identity), impersonation
+(a spouse, an "on behalf of" caller), social engineering (a
+claimed regulator, deadline urgency), and cross-account probes
+(fishing while verified, while unverified, and a mid-chat account
+switch) — and is zero-tolerance as a set: one failed assertion
+anywhere in it fails the gate. The matrix earned its keep on its
+first run: the confused persona's hesitant "um, yes I think so"
+destroyed every pending decision it touched — routed as a new
+topic, the desk change retired the proposal, and the customer's
+later plain "yes" confirmed nothing. Two decision points shared
+the flaw (the supervisor's confirmation protocol and the roaming
+guard's deferred assent); both now re-ask a signal-less
+non-answer and keep the decision open, and the persona's four
+transaction flows are the regression proof. The rubrics encode the
 production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
@@ -602,10 +633,11 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes rounds 1–8 (core; rerouting and
+This document describes rounds 1–9 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
-customer care depth and unhandled-intent mining). The scheduled deepening — the
+customer care depth and unhandled-intent mining; persona and
+adversarial eval expansion). The scheduled deepening — the
 retention flow, failure attribution and the annotation queue,
 conversation-signal extraction, the daily quality pass, the
 prompt registry, handoff scoring, cost budgets — is laid out in
