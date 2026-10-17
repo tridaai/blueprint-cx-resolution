@@ -35,6 +35,15 @@ from . import procedures
 from . import signals as signals_mod
 from .config import Policy
 from .llm import DraftContext
+from .prompts import (
+    COMPOSE_SYSTEM_ID,
+    COMPOSE_USER_ID,
+    INTENT_SYSTEM_ID,
+    INTENT_USER_ID,
+    PromptRegistry,
+    explanation_prompt_id,
+    policy_prompt_id,
+)
 from .models import (
     ActionKind,
     AuditEvent,
@@ -105,8 +114,23 @@ class Supervisor:
         self.store = store
         self.policy = policy
         self.llm = llm
+        self.prompts = PromptRegistry(store)
         self.ctx = Ctx(store=store, policy=policy, retriever=retriever)
         self.graph = self._build()
+
+    def _record_prompts(self, conv: Conversation, prompt_ids) -> None:
+        """Note the registry versions serving this conversation
+        (round 13) on its record — the compose instructions in
+        force, the intent prompt when a hint is taken, each policy
+        document at the version cited, each second form at the
+        version served — so a historical reply can be traced to
+        the exact texts behind it. Recording never fails a turn:
+        a registry that cannot serve an entry refuses loudly at
+        the boundary that needs the text, not in bookkeeping."""
+        for pid in prompt_ids:
+            version = self.prompts.version_or_none(pid)
+            if version is not None:
+                conv.prompt_versions[pid] = version
 
     # -- graph construction ---------------------------------------------
     def _build(self):
@@ -613,13 +637,14 @@ class Supervisor:
         return state
 
     # -- routing + specialists ------------------------------------------------
-    def _hint(self, text: str, analysis) -> str | None:
+    def _hint(self, conv: Conversation, text: str, analysis) -> str | None:
         """The model's tie-break hint, live mode only. Used when the
         router commits — a three-way tie, or a clarification the
         customer left unanswered — never instead of asking when
         exactly two desks tie on a real signal."""
         if analysis.scores and self.llm.backend != "offline" \
                 and len(analysis.leaders) > 1:
+            self._record_prompts(conv, [INTENT_SYSTEM_ID, INTENT_USER_ID])
             return self.llm.intent_hint(text)
         return None
 
@@ -671,7 +696,7 @@ class Supervisor:
         # nothing") that carry no routing signal of their own.
         walk = conv.specialist_state.get("technical", {})
         if walk.get("procedure_id"):
-            raw = route(text, self._hint(text, analysis))
+            raw = route(text, self._hint(conv, text, analysis))
             if raw != Intent.TECHNICAL and (
                     classify_step_outcome(text) != "unclear"
                     or not analysis.scores):
@@ -712,7 +737,7 @@ class Supervisor:
             if record["decision"] == "route":
                 record["decision"] = "low_confidence_care"
         else:
-            intent = route(text, self._hint(text, analysis))
+            intent = route(text, self._hint(conv, text, analysis))
         conv.intent = intent
         self._change_desk(state, intent, record)
         state["next"] = "specialist"
@@ -810,6 +835,12 @@ class Supervisor:
                 used.append(served)
             self._signal_event(state, f"second_form:{served}", "applied",
                                event="second_form")
+            if served != "bill":
+                # The form that was served is a registry text; the
+                # bill's form is a computed template, with no entry
+                # to record (round 13).
+                self._record_prompts(
+                    conv, [explanation_prompt_id(served)])
         if result.citations and sig.get("explained_turn") != conv.turns:
             sig["explained_topic"] = result.citations[0]
             sig["explained_turn"] = conv.turns
@@ -944,6 +975,12 @@ class Supervisor:
             citations=citations,
             customer_message=state["text"],
         )
+        # The registry versions this reply is produced under: the
+        # compose instructions, and each policy document at the
+        # version it is cited in (round 13).
+        self._record_prompts(
+            conv, [COMPOSE_SYSTEM_ID, COMPOSE_USER_ID]
+            + [policy_prompt_id(doc_id) for doc_id, _t in citations])
         reply = self.llm.draft_reply(ctx)
         # Code-level guarantees, whatever the drafter did:
         for line in must_include:

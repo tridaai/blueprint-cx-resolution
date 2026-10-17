@@ -16,6 +16,13 @@ action gates are code (see supervisor.py, identity.py,
 escalation.py, actions.py). If a live call fails, drafting degrades
 to the offline composer for that turn and the failure is logged —
 the rules never degrade with it.
+
+The prompts themselves are not in this file: the compose and
+intent instructions are prompt-registry entries (prompts.py),
+resolved at call time at their active versions. A live drafter
+with no registry wired, or a registry that cannot serve an
+entry, refuses with PromptRegistryError — the boundary never
+falls back to a prompt from memory.
 """
 
 from __future__ import annotations
@@ -24,6 +31,14 @@ import logging
 from dataclasses import dataclass, field
 
 from .config import LLMConfig
+from .prompts import (
+    COMPOSE_SYSTEM_ID,
+    COMPOSE_USER_ID,
+    INTENT_SYSTEM_ID,
+    INTENT_USER_ID,
+    PromptRegistryError,
+    render_template,
+)
 
 log = logging.getLogger("cx_agent.llm")
 
@@ -37,16 +52,6 @@ class DraftContext:
     action_prompt: str = ""  # the confirmation ask, when an action pends
     citations: list[tuple[str, str]] = field(default_factory=list)  # (doc_id, title)
     customer_message: str = ""
-
-
-_SYSTEM = (
-    "You are the voice of Northbeam Mobile's customer support agent. "
-    "Write one clear, warm reply using ONLY the facts provided. Never "
-    "invent figures, dates, policy terms or account details. Keep every "
-    "verbatim line exactly as given. If a Sources line is provided, end "
-    "the reply with it unchanged. Do not promise anything the facts do "
-    "not state."
-)
 
 
 def _offline_compose(ctx: DraftContext) -> str:
@@ -78,9 +83,23 @@ class OfflineLLM:
 
 
 class LiveLLM:
+    # The prompt registry the prompts resolve from — wired by the
+    # service at construction. Deliberately not defaulted: a live
+    # drafter without a registry refuses (see _require_prompts).
+    prompts = None
+
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
         self.backend = config.backend
+
+    def _require_prompts(self):
+        if self.prompts is None:
+            raise PromptRegistryError(
+                "prompt registry: the live drafter has no registry "
+                "wired — it will not draft from a remembered prompt; "
+                "the service wires the store's registry at "
+                "construction")
+        return self.prompts
 
     # -- provider calls ------------------------------------------------
     def _chat(self, system: str, user: str) -> str:
@@ -124,20 +143,25 @@ class LiveLLM:
 
     # -- the two language jobs -----------------------------------------
     def draft_reply(self, ctx: DraftContext) -> str:
+        # The prompts resolve BEFORE the guarded call, on purpose:
+        # a registry that cannot serve them is a deployment defect
+        # and refuses loudly — it is not a drafting failure to
+        # degrade around.
+        registry = self._require_prompts()
+        system = registry.active_text(COMPOSE_SYSTEM_ID)
         facts = "\n".join(f"- {t}" for t in ctx.findings) or "- (no findings)"
         verbatim = "\n".join(f"- {t}" for t in ctx.must_include)
         sources = ""
         if ctx.citations:
             refs = "; ".join(f"{d} ({t})" for d, t in ctx.citations)
             sources = f"\nSources line to end with: Sources: {refs}."
-        user = (
-            f"Customer said: {ctx.customer_message}\n\nFacts established:\n{facts}\n\n"
-            f"Lines that must appear verbatim:\n{verbatim or '- (none)'}\n\n"
-            f"Confirmation ask to include, if any: {ctx.action_prompt or '(none)'}"
-            f"{sources}"
-        )
+        user = render_template(
+            registry.active_text(COMPOSE_USER_ID),
+            customer_message=ctx.customer_message, facts=facts,
+            verbatim=verbatim or "- (none)",
+            action_prompt=ctx.action_prompt or "(none)", sources=sources)
         try:
-            text = self._chat(_SYSTEM, user).strip()
+            text = self._chat(system, user).strip()
             if text:
                 return text
         except Exception as exc:  # drafting degrades, rules do not
@@ -147,11 +171,12 @@ class LiveLLM:
 
     def intent_hint(self, text: str) -> str | None:
         allowed = "billing, roaming, offers, technical, account, care"
+        registry = self._require_prompts()
+        system = registry.active_text(INTENT_SYSTEM_ID)
+        user = render_template(registry.active_text(INTENT_USER_ID),
+                               labels=allowed, text=text)
         try:
-            out = self._chat(
-                "Classify a telecom support message into exactly one label.",
-                f"Labels: {allowed}. Reply with the label only.\n\nMessage: {text}",
-            ).strip().lower()
+            out = self._chat(system, user).strip().lower()
             return out if out in allowed.split(", ") else None
         except Exception as exc:
             log.warning("intent hint failed", extra={"fields": {"error": str(exc)}})

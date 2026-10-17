@@ -14,9 +14,10 @@ import uuid
 from . import attribution, care_book, mining, signals
 from .config import LLMConfig, Policy
 from .dataset import seed_store
-from .llm import make_llm
+from .llm import LiveLLM, make_llm
 from .models import (AuditEvent, Conversation, Escalation, HandoffPacket,
                     TurnResult)
+from .prompts import PromptRegistry
 from .retrieval import PolicyRetriever
 from .store import Store, make_store
 from .supervisor import Supervisor
@@ -30,6 +31,11 @@ class ConversationService:
         self.store = store or make_store()
         self.policy = policy or Policy.from_env()
         self.llm = llm or make_llm(llm_config)
+        # The prompt registry is a view over this service's store;
+        # a live drafter resolves its prompts from it (round 13).
+        self.prompts = PromptRegistry(self.store)
+        if isinstance(self.llm, LiveLLM):
+            self.llm.prompts = self.prompts
         self.retriever = PolicyRetriever(self.store)
         self.supervisor = Supervisor(self.store, self.policy, self.llm,
                                      self.retriever)
