@@ -100,12 +100,13 @@ def test_chasing_a_complaint_answers_from_its_record(service):
     assert len(rows) == 1  # answered from the record, not re-recorded
     assert rows[0].complaint_id in result.reply
     assert "2026-10-06" in result.reply
-    # A second, different complaint is a second record.
+    # A second, different complaint is a second record. (Listings
+    # sort by date then id, so compare the records as a set.)
     _say(service, conv.conversation_id,
          "And another complaint — there is no signal at my house at all.")
     rows = service.store.list_complaints()
     assert len(rows) == 2
-    assert rows[1].category == "coverage"
+    assert {r.category for r in rows} == {"appointment", "coverage"}
 
 
 def test_complaint_without_an_account_is_still_recorded(service):
