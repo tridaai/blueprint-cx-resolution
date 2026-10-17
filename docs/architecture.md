@@ -153,7 +153,7 @@ transactional desk on a guess.
 | Desk | Tools it works with | What it can propose |
 |---|---|---|
 | billing | bill history, dispute cases, credit policy + trailing credit history | `apply_credit` (dispute or goodwill class) |
-| roaming | account roaming state, offer catalogue, fair-use policy | `activate_offer` (Roam Pass) |
+| roaming | account roaming state, rate table, usage profile, offer catalogue, fair-use notices | `activate_offer` (Roam Pass) |
 | offers | plan catalogue, loyalty offer, cycle calendar, change history | `change_plan` (and its reversal) |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
 | account | account record, balance, arrangement policy | `update_payment_method`, `payment_arrangement` |
@@ -176,7 +176,47 @@ average leads with the family the deltas indict. Goodwill runs on
 a separate tier with a memory: the account's executed credits in
 the trailing 90 days bound what may be offered, a refusal is
 recorded with its reason, and the evidenced path is never
-throttled by the goodwill history.
+throttled by the goodwill history. Roaming lines carry a second
+evidence source — the account's own records — covered next.
+
+## Roaming depth
+
+Roaming works from a rate table, not from memory
+(`roaming_book.py`). A trip quote multiplies the customer's
+recorded typical daily use by the trip length and prices the
+trip twice: pay-as-you-go at the destination rate, and under
+the Roam Pass — its price plus the overage beyond its daily
+allowance at the same rate. The desk recommends whichever is
+cheaper and states both figures and the saving; every number is
+computed in Decimal from the table, the profile and the
+catalogue, so there is no figure for a model to invent.
+
+Two guards hold in code. The **bill-shock guard**: when the
+pay-as-you-go projection passes the policy threshold, the quote
+turn carries no proposed action at all — the projection and the
+comparison lead, and the purchase waits for the customer's next
+message (the desk leaves an awaiting-decision marker that holds
+the floor for that answer; an assent completes the deferred
+purchase, a refusal closes it). The same guard fires from
+actuals for a customer already abroad past the fair-use
+ceiling, leading with the overage already run up. And
+**fair-use notices**: usage accrues on the account record, and
+crossing 80% or 100% of the ceiling raises a stored notice
+whose summary — used, cap, projected overage cost at the
+current pace — is composed from computed figures and shown in
+conversation in the same act. A 100% crossing with no earlier
+warning on record is flagged on the notice as a policy event.
+
+That record is also the roaming dispute evidence. A disputed
+roaming line is decided by reading the account: an executed
+pass whose window covers the billed cycle stands the charge; a
+fair-use warning dated on or before the cycle's close stands
+it too (a warning raised inside the disputing conversation
+itself does not count — it post-dates the usage); usage past
+the ceiling with neither on record makes the line evidenced,
+and it credits — or escalates above the dispute cap — through
+the same machinery as any bill-marked line. The dispute case
+records which evidence applied, line by line.
 
 ## Plan-change transactions
 

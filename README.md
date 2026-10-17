@@ -100,10 +100,23 @@ open http://localhost:8000              # the operator console
   intact. Goodwill credits follow their own smaller cap — and a
   rolling cap over the account's trailing 90 days of credit
   history, read in code before any offer is made.
-- **Roaming** — explains rates and usage from the account; sells
-  the Roam Pass only after the fair-use warning when the customer
-  is past the ceiling. The warning precedes any chargeable offer,
-  by rule.
+- **Roaming** — prices a trip before it's taken: the destination
+  rate, the trip length and the customer's own usage profile give
+  a pay-as-you-go figure and a Roam Pass figure (allowance and
+  overage included), and the cheaper one is recommended with the
+  saving stated. A projection past the bill-shock threshold
+  leads the conversation and defers any chargeable proposal a
+  turn; the same rule fires from actual usage when the customer
+  is already past the fair-use ceiling. Usage accrues on the
+  account, and crossing 80% or 100% of the ceiling raises a
+  stored fair-use notice whose summary — used, cap, projected
+  overage at the current pace — reaches the customer in the same
+  act. A crossing with no earlier warning on record is flagged
+  on the notice, and it decides roaming disputes: a charge past
+  the ceiling with no warning given is evidenced and credits
+  through the dispute machinery; a charge inside an active pass
+  window, or after a recorded warning, stands — with the
+  evidence noted on the case either way.
 - **Offers & plan changes** — eligibility and proration computed
   in code, off the account's real cycle calendar: the customer
   sees the credit, the charge, the net and the projected next
