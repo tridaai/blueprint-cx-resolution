@@ -83,8 +83,24 @@ def build_customers() -> list[Customer]:
     ]
 
 
+def _cycle_dates(account: Account) -> Account:
+    """Stamp the account's current cycle as dates, derived from its
+    cycle position against the shared clock — the same pinning the
+    seeded credit history uses, so the calendar means the same
+    thing whenever the book is seeded: the cycle started
+    (cycle_day - 1) days ago and runs cycle_days days in all."""
+    from datetime import timedelta
+
+    from .clock import today
+
+    start = today() - timedelta(days=account.cycle_day - 1)
+    account.cycle_start = start.isoformat()
+    account.cycle_end = (start + timedelta(days=account.cycle_days - 1)).isoformat()
+    return account
+
+
 def build_accounts() -> list[Account]:
-    return [
+    return [_cycle_dates(account) for account in [
         Account(account_number="NB-1001", customer_id="CUST-001", plan_id="PLAN-ESS",
                 balance_due=D("94.35"), payment_method_last4="4417", cycle_day=19),
         Account(account_number="NB-1002", customer_id="CUST-002", plan_id="PLAN-UNL",
@@ -114,7 +130,7 @@ def build_accounts() -> list[Account]:
                 balance_due=D("72.61"), payment_method_last4="7305", cycle_day=19),
         Account(account_number="NB-1012", customer_id="CUST-012", plan_id="PLAN-ESS",
                 balance_due=D("130.38"), payment_method_last4="2214", cycle_day=19),
-    ]
+    ]]
 
 
 _CURRENT_CYCLE = ("2026-09-12", "2026-10-11", "2026-10-12", "2026-11-02")

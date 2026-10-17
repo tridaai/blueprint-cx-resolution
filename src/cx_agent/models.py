@@ -88,6 +88,17 @@ class Account(BaseModel):
     diagnostics: dict[str, str] = Field(default_factory=dict)
     cycle_day: int = 11  # days elapsed in the current cycle (of 30)
     cycle_days: int = 30
+    # The current cycle as dates on the record — proration reads
+    # these (via the shared clock), never the bare counts above:
+    # the counts say where the account sits, the dates say when
+    # that is, and money is computed from the when.
+    cycle_start: str = ""  # ISO date
+    cycle_end: str = ""  # ISO date, inclusive
+    # A plan change scheduled for the next cycle boundary (a
+    # downgrade, by policy): the plan it will move to, and the
+    # date it takes effect. The live plan does not move until then.
+    pending_plan_id: str | None = None
+    pending_plan_effective: str = ""  # ISO date
     open_case: str | None = None
 
 
