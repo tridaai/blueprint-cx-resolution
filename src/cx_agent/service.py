@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import attribution, care_book, mining, retention_book, signals
+from . import attribution, care_book, incidents, mining, retention_book, signals
 from . import prompts as prompts_mod
 from .config import LLMConfig, Policy
 from .dataset import seed_store
@@ -333,6 +333,55 @@ class ConversationService:
                 "text": entry.text if entry else "",
             })
         return rows
+
+    # -- the incident feed (round 15) -------------------------------
+
+    def list_incidents(self, status: str | None = None):
+        """The operator incident feed, in feed order — optionally
+        only the incidents in one status."""
+        rows = self.store.list_incidents()
+        if status:
+            rows = [i for i in rows if i.status == status]
+        return rows
+
+    def get_incident(self, incident_id: str):
+        return self.store.get_incident(incident_id)
+
+    def add_incident(self, **fields):
+        """Add an incident to the feed — a recorded operator act.
+        A refused act (a duplicate id, a value outside the
+        governed vocabularies) raises IncidentError and writes
+        nothing."""
+        return incidents.add_incident(self.store, **fields)
+
+    def update_incident(self, incident_id: str, actor: str = "",
+                        note: str = "", **fields):
+        """Update an incident's governed fields — a recorded
+        operator act."""
+        return incidents.update_incident(
+            self.store, incident_id, actor, note, **fields)
+
+    def resolve_incident(self, incident_id: str, actor: str = "",
+                         note: str = ""):
+        """Resolve an incident — a recorded operator act. From
+        this act on it matches nothing, including in
+        conversations already open."""
+        return incidents.resolve_incident(
+            self.store, incident_id, actor, note)
+
+    def list_incident_acts(self, incident_id: str | None = None):
+        """The feed's act log — every add, update and resolve,
+        in the order they happened."""
+        return self.store.list_incident_acts(incident_id)
+
+    def conversation_incidents(self, conversation_id: str):
+        """One conversation's incident matches (incident id, the
+        matched signals, the turn), each with the incident's live
+        status — or None when the conversation does not exist."""
+        conv = self.store.get_conversation(conversation_id)
+        if conv is None:
+            return None
+        return incidents.conversation_matches(self.store, conv)
 
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:

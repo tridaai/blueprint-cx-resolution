@@ -77,6 +77,36 @@ class PromptUnpinIn(BaseModel):
     note: str = ""
 
 
+class IncidentIn(BaseModel):
+    incident_id: str = ""
+    title: str
+    service: str
+    summary: str
+    symptom_signals: list[str]
+    affected_postcodes: list[str] = []
+    status: str = "active"
+    started_at: str = ""
+    actor: str = ""
+    note: str = ""
+
+
+class IncidentUpdateIn(BaseModel):
+    title: str | None = None
+    service: str | None = None
+    summary: str | None = None
+    symptom_signals: list[str] | None = None
+    affected_postcodes: list[str] | None = None
+    status: str | None = None
+    started_at: str | None = None
+    actor: str = ""
+    note: str = ""
+
+
+class IncidentResolveIn(BaseModel):
+    actor: str = ""
+    note: str = ""
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -529,6 +559,100 @@ def conversation_prompts(conversation_id: str) -> dict:
     if rows is None:
         raise HTTPException(status_code=404, detail="no such conversation")
     return {"conversation_id": conversation_id, "prompts": rows}
+
+
+@app.get("/incidents", dependencies=[Depends(require_key)])
+def list_incidents(status: str | None = None) -> dict:
+    """The operator incident feed: every known-issue record, in
+    feed order — the service, the areas it covers, the declared
+    signals, the status, and the operator's summary the agent
+    serves verbatim."""
+    rows = []
+    for incident in service.list_incidents(status):
+        row = incident.model_dump(mode="json")
+        row["acts"] = len(service.list_incident_acts(incident.incident_id))
+        rows.append(row)
+    return {"incidents": rows}
+
+
+@app.get("/incidents/{incident_id}", dependencies=[Depends(require_key)])
+def get_incident(incident_id: str) -> dict:
+    """One incident in full, with its operator act log."""
+    incident = service.get_incident(incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="no such incident")
+    row = incident.model_dump(mode="json")
+    row["acts"] = [a.model_dump(mode="json")
+                   for a in service.list_incident_acts(incident_id)]
+    return row
+
+
+def _incident_act_or_http(fn, *args, **kwargs):
+    """Run an incident-feed act, translating its refusal: a
+    broken rule is a 400 naming it — nothing was written."""
+    from .incidents import IncidentError
+
+    try:
+        return fn(*args, **kwargs)
+    except IncidentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/incidents", dependencies=[Depends(require_key)])
+def add_incident(body: IncidentIn) -> dict:
+    """Add an incident to the feed — a recorded operator act.
+    The record is validated against the governed vocabularies
+    (service, status, declared signals, a customer-safe summary)
+    before anything is written."""
+    incident = _incident_act_or_http(
+        service.add_incident,
+        incident_id=body.incident_id, title=body.title,
+        service=body.service, summary=body.summary,
+        symptom_signals=body.symptom_signals,
+        affected_postcodes=body.affected_postcodes,
+        status=body.status, started_at=body.started_at,
+        actor=body.actor, note=body.note)
+    return incident.model_dump(mode="json")
+
+
+@app.post("/incidents/{incident_id}/update",
+          dependencies=[Depends(require_key)])
+def update_incident(incident_id: str, body: IncidentUpdateIn) -> dict:
+    """Update an incident's governed fields — a recorded
+    operator act. Only the fields the caller sends change."""
+    if service.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail="no such incident")
+    fields = {key: value for key, value in body.model_dump().items()
+              if key not in ("actor", "note") and value is not None}
+    incident = _incident_act_or_http(
+        service.update_incident, incident_id, body.actor, body.note,
+        **fields)
+    return incident.model_dump(mode="json")
+
+
+@app.post("/incidents/{incident_id}/resolve",
+          dependencies=[Depends(require_key)])
+def resolve_incident(incident_id: str, body: IncidentResolveIn) -> dict:
+    """Resolve an incident — a recorded operator act. From this
+    act on it matches nothing, including in conversations
+    already open."""
+    if service.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail="no such incident")
+    incident = _incident_act_or_http(
+        service.resolve_incident, incident_id, body.actor, body.note)
+    return incident.model_dump(mode="json")
+
+
+@app.get("/conversations/{conversation_id}/incidents",
+         dependencies=[Depends(require_key)])
+def conversation_incidents(conversation_id: str) -> dict:
+    """The incidents this conversation matched — incident id,
+    the signals that matched, the turn — each with the
+    incident's live status."""
+    rows = service.conversation_incidents(conversation_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"conversation_id": conversation_id, "matches": rows}
 
 
 @app.get("/signals/{conversation_id}", dependencies=[Depends(require_key)])

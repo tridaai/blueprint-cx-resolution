@@ -97,6 +97,8 @@
     <h2 style="margin-top:22px">Retention cases</h2>
     <div id="retention"><p class="empty">No retention cases. When a customer says they want to leave, the case — their reason in their own words, the one save offer if one was made, and the outcome — lands here.</p></div>
     <div id="retention-report" class="empty"></div>
+    <h2 style="margin-top:22px">Incident feed — known issues</h2>
+    <div id="incidents"><p class="empty">No incidents on the feed. When operations records a known issue — its service, the areas it covers, the signals that identify it, and the customer-safe summary — the agent acknowledges it to affected customers instead of troubleshooting blind.</p></div>
     <button class="ghost" onclick="runWatch()">Run complaint SLA watch</button>
     <div id="watch-note" class="empty" style="margin-top:6px"></div>
     <h2 style="margin-top:22px">Feedback &amp; compliments</h2>
@@ -310,7 +312,11 @@ async function refresh() {
         '<div class="k">Summary</div><div>' + p.summary + '</div>' +
         '<div class="k">Attempts</div><ul>' + p.attempts.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
         '<div class="k">Actions taken</div><ul>' + p.actions_taken.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
-        '<div class="k">Open items</div><ul>' + p.open_items.map(a => "<li>" + a + "</li>").join("") + '</ul>';
+        '<div class="k">Open items</div><ul>' + p.open_items.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
+        ((p.known_incidents && p.known_incidents.length) ?
+          '<div class="k">Known issues matched</div><ul>' +
+          p.known_incidents.map(k => "<li>" + k.incident_id + " — " + k.title +
+            " (" + k.status + "): " + k.summary + "</li>").join("") + '</ul>' : "");
       ebox.appendChild(div);
     }
   }
@@ -471,6 +477,28 @@ async function refresh() {
         (c.cancellation_effective ? '<div class="k">Cancellation effective</div><div>' + c.cancellation_effective + "</div>" : "") +
         '<div class="k">The customer\'s words</div><div>' + c.reason_text + "</div>";
       rbox.appendChild(div);
+    }
+  }
+  const inc = await api("/incidents");
+  const ibox = document.getElementById("incidents");
+  if (!inc.incidents.length) {
+    ibox.innerHTML = '<p class="empty">No incidents on the feed. When operations records a known issue — its service, the areas it covers, the signals that identify it, and the customer-safe summary — the agent acknowledges it to affected customers instead of troubleshooting blind.</p>';
+  } else {
+    ibox.innerHTML = "";
+    for (const i of inc.incidents) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const status = i.status === "resolved" ? '<span class="chip green">resolved</span>'
+        : i.status === "monitoring" ? '<span class="chip">monitoring</span>'
+        : '<span class="chip red">active</span>';
+      div.innerHTML = "<h3>" + i.incident_id + " — " + i.title + "</h3>" + status +
+        '<div class="k">Service · areas · since</div><div>' + i.service +
+        " · " + (i.affected_postcodes.length ? i.affected_postcodes.join(", ") : "all areas") +
+        " · " + i.started_at + '</div>' +
+        '<div class="k">Declared signals</div><div>' + i.symptom_signals.join(", ") + '</div>' +
+        '<div class="k">Summary the agent serves</div><div>' + i.summary + '</div>' +
+        '<div class="k">Operator acts</div><div>' + i.acts + '</div>';
+      ibox.appendChild(div);
     }
   }
   const rrep = await api("/retention/report");

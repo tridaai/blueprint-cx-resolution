@@ -29,6 +29,14 @@
         <prompt-id> <version>
     cx-agent prompt-unpin    lift an entry's pin:
         <prompt-id>
+    cx-agent incidents       the incident feed (known issues, their
+                             status, scope and declared signals)
+    cx-agent incident-add    add an incident from a JSON file:
+        <file>
+    cx-agent incident-update update an incident from a JSON file:
+        <incident-id> <file>
+    cx-agent incident-resolve resolve an incident (it stops
+        <incident-id>        matching from this act on)
 """
 
 from __future__ import annotations
@@ -253,6 +261,64 @@ def main(argv: list[str] | None = None) -> int:
                   "was written", file=sys.stderr)
             return 1
         except (PromptRegistryError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
+    if cmd == "incidents":
+        rows = service.list_incidents()
+        if not rows:
+            print("The incident feed is empty — run cx-agent seed first.")
+            return 0
+        for i in rows:
+            areas = (", ".join(i.affected_postcodes)
+                     if i.affected_postcodes else "all areas")
+            print(f"{i.incident_id}  {i.status:<10} {i.service:<16} "
+                  f"{i.title}  [{areas}]  since {i.started_at}")
+            print(f"    signals: {', '.join(i.symptom_signals)}")
+            print(f"    summary: {i.summary}")
+        return 0
+    if cmd in ("incident-add", "incident-update", "incident-resolve"):
+        from .incidents import IncidentError
+
+        try:
+            if cmd == "incident-add":
+                if len(argv) < 2:
+                    print("usage: cx-agent incident-add <file>",
+                          file=sys.stderr)
+                    return 2
+                with open(argv[1], encoding="utf-8") as fh:
+                    fields = json.load(fh)
+                actor = fields.pop("actor", "cli")
+                note = fields.pop("note", "")
+                incident = service.add_incident(
+                    actor=actor, note=note, **fields)
+                print(f"{incident.incident_id}: added to the feed "
+                      f"({incident.status}, {incident.service})")
+            elif cmd == "incident-update":
+                if len(argv) < 3:
+                    print("usage: cx-agent incident-update "
+                          "<incident-id> <file>", file=sys.stderr)
+                    return 2
+                with open(argv[2], encoding="utf-8") as fh:
+                    fields = json.load(fh)
+                actor = fields.pop("actor", "cli")
+                note = fields.pop("note", "")
+                incident = service.update_incident(
+                    argv[1], actor, note, **fields)
+                print(f"{incident.incident_id}: updated "
+                      f"({incident.status}, {incident.service})")
+            else:
+                if len(argv) < 2:
+                    print("usage: cx-agent incident-resolve "
+                          "<incident-id>", file=sys.stderr)
+                    return 2
+                incident = service.resolve_incident(argv[1], actor="cli")
+                print(f"{incident.incident_id}: resolved — it no "
+                      f"longer matches any report")
+        except IncidentError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
         return 0
