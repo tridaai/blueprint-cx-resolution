@@ -94,6 +94,9 @@
     <div id="payment-notices"><p class="empty">No payment notices. When an automatic payment fails, the notice carrying its figures — the summary the customer is shown at their next contact — lands here.</p></div>
     <h2 style="margin-top:22px">Complaints</h2>
     <div id="complaints"><p class="empty">No complaints. When a customer complains, the record — their words, the category, the response deadline the SLA clock runs against — lands here.</p></div>
+    <h2 style="margin-top:22px">Retention cases</h2>
+    <div id="retention"><p class="empty">No retention cases. When a customer says they want to leave, the case — their reason in their own words, the one save offer if one was made, and the outcome — lands here.</p></div>
+    <div id="retention-report" class="empty"></div>
     <button class="ghost" onclick="runWatch()">Run complaint SLA watch</button>
     <div id="watch-note" class="empty" style="margin-top:6px"></div>
     <h2 style="margin-top:22px">Feedback &amp; compliments</h2>
@@ -448,6 +451,34 @@ async function refresh() {
       cmbox.appendChild(div);
     }
   }
+  const ret = await api("/retention/cases");
+  const rbox = document.getElementById("retention");
+  if (!ret.cases.length) {
+    rbox.innerHTML = '<p class="empty">No retention cases. When a customer says they want to leave, the case — their reason in their own words, the one save offer if one was made, and the outcome — lands here.</p>';
+  } else {
+    rbox.innerHTML = "";
+    for (const c of ret.cases) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>" + c.case_id + " — " + c.reason.replace(/_/g, " ") + "</h3>" +
+        '<div class="k">Account · state · outcome</div><div>' + (c.account_number || "—") +
+        " · " + c.state + " · " + (c.outcome || "still open") + "</div>" +
+        (c.save_offer_summary ? '<div class="k">The one save offer</div><div>' +
+          c.save_offer_summary + " (" + c.save_offer_mechanism + ", " +
+          c.save_offer_outcome + ")</div>" : '<div class="k">Save offer</div><div>none made</div>') +
+        (c.no_offers_requested ? '<div class="k">No offers</div><div>the customer asked for none, and none was made</div>' : "") +
+        (c.routed ? '<div class="k">Routed</div><div>' + c.routed.replace(/_/g, " ") + "</div>" : "") +
+        (c.cancellation_effective ? '<div class="k">Cancellation effective</div><div>' + c.cancellation_effective + "</div>" : "") +
+        '<div class="k">The customer\'s words</div><div>' + c.reason_text + "</div>";
+      rbox.appendChild(div);
+    }
+  }
+  const rrep = await api("/retention/report");
+  document.getElementById("retention-report").textContent = ret.cases.length ?
+    "Report: " + rrep.cases + " case(s) · " + rrep.offers_made + " offer(s) made, " +
+    rrep.offers_accepted + " accepted · save rate over decided cases " +
+    (rrep.save_rate === null ? "—" : Math.round(rrep.save_rate * 100) + "%") +
+    " · " + rrep.cancellations_completed + " cancellation(s) completed." : "";
   const fbk = await api("/feedback");
   const fbox = document.getElementById("feedback");
   if (!fbk.feedback.length) {

@@ -15,6 +15,11 @@
     cx-agent daily-quality   run the daily quality pass and print
         [--date YYYY-MM-DD]  its digest (default date: today)
     cx-agent quality-trend   headline metrics across stored digests
+    cx-agent retention       list retention cases (reason, the one
+                             save offer, the outcome)
+    cx-agent retention-report the retention report: cases by
+                             reason, offers made/accepted, the
+                             save rate over decided cases
     cx-agent prompts         the prompt registry's active set
     cx-agent prompt-lint     lint the active registry (figures,
                              promises, side channels, composition)
@@ -143,6 +148,35 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         digest = service.run_daily_quality(on)
         print(quality.render_digest_markdown(digest))
+        return 0
+    if cmd == "retention":
+        for c in service.list_retention_cases():
+            offer = (f"offer={c.save_offer_mechanism}:"
+                     f"{c.save_offer_outcome}" if c.save_offer_summary
+                     else "offer=none")
+            print(f"{c.case_id}  reason={c.reason}  state={c.state}  "
+                  f"outcome={c.outcome or '-'}  {offer}  "
+                  f"account={c.account_number or '-'}  "
+                  f"conv={c.conversation_id}")
+        return 0
+    if cmd == "retention-report":
+        report = service.retention_report()
+        print(f"Retention — {report['cases']} case(s), "
+              f"{report['decided_cases']} decided")
+        for reason, count in report["by_reason"].items():
+            if count:
+                print(f"  reason {reason:<18} {count}")
+        print(f"  offers: {report['offers_made']} made, "
+              f"{report['offers_accepted']} accepted, "
+              f"{report['offers_declined']} declined; "
+              f"no offers requested in {report['no_offers_requested']}")
+        rate = report["save_rate"]
+        print(f"  save rate over decided cases: "
+              f"{'—' if rate is None else f'{rate:.0%}'}  "
+              f"cancellations completed: "
+              f"{report['cancellations_completed']}  "
+              f"escalated to humans: "
+              f"{report['escalated_retention_team']}")
         return 0
     if cmd == "prompts":
         rows = service.list_prompts()

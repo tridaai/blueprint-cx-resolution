@@ -185,6 +185,30 @@ def get_dispute(case_id: str) -> dict:
     return case.model_dump(mode="json")
 
 
+@app.get("/retention/report", dependencies=[Depends(require_key)])
+def retention_report() -> dict:
+    """The retention report: cases by reason, offers made and
+    accepted, the save rate over decided cases, cancellations
+    completed — counts from the case records only."""
+    return service.retention_report()
+
+
+@app.get("/retention/cases", dependencies=[Depends(require_key)])
+def list_retention_cases(conversation_id: str | None = None,
+                         account_number: str | None = None) -> dict:
+    return {"cases": [c.model_dump(mode="json") for c in
+                      service.list_retention_cases(conversation_id,
+                                                   account_number)]}
+
+
+@app.get("/retention/cases/{case_id}", dependencies=[Depends(require_key)])
+def get_retention_case(case_id: str) -> dict:
+    case = service.get_retention_case(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="no such retention case")
+    return case.model_dump(mode="json")
+
+
 @app.get("/callbacks", dependencies=[Depends(require_key)])
 def list_callbacks(conversation_id: str | None = None) -> dict:
     return {"callbacks": [c.model_dump(mode="json")

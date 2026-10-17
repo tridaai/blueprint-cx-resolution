@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import attribution, care_book, mining, signals
+from . import attribution, care_book, mining, retention_book, signals
 from . import prompts as prompts_mod
 from .config import LLMConfig, Policy
 from .dataset import seed_store
@@ -68,6 +68,19 @@ class ConversationService:
 
     def get_dispute(self, case_id: str):
         return self.store.get_dispute_case(case_id)
+
+    def list_retention_cases(self, conversation_id: str | None = None,
+                             account_number: str | None = None):
+        return self.store.list_retention_cases(conversation_id,
+                                               account_number)
+
+    def get_retention_case(self, case_id: str):
+        return self.store.get_retention_case(case_id)
+
+    def retention_report(self) -> dict:
+        """The retention report over every stored case — counts
+        from the case records only (retention_book)."""
+        return retention_book.retention_report(self.store)
 
     def list_audit(self, conversation_id: str):
         return self.store.list_audit(conversation_id)
