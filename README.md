@@ -89,12 +89,17 @@ open http://localhost:8000              # the operator console
 
 ## What the agent does
 
-- **Billing** — decomposes the latest bill line by line from the
-  record; disputes are checked against evidence on the bill
-  itself (a duplicate charge, a charge after cancellation, a wrong
-  rate) and credited in full up to the agent's cap, or escalated
-  to the billing queue above it. Goodwill credits follow their own
-  smaller cap.
+- **Billing** — decomposes the latest bill by charge family from
+  the record and compares it with the previous bill; when the
+  total jumps past the bill-shock threshold over the trailing
+  average, the explanation leads with the computed driver.
+  Disputes become cases: each disputed line is decided on its own
+  evidence (a duplicate charge, a charge after cancellation, a
+  wrong rate) and credited, declined with the reason in plain
+  words, or escalated above the agent's cap with the case record
+  intact. Goodwill credits follow their own smaller cap — and a
+  rolling cap over the account's trailing 90 days of credit
+  history, read in code before any offer is made.
 - **Roaming** — explains rates and usage from the account; sells
   the Roam Pass only after the fair-use warning when the customer
   is past the ceiling. The warning precedes any chargeable offer,
@@ -168,11 +173,12 @@ state of the tree: 196/196 assertions, 109/109 zero-tolerance.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (60 tests) covers the deterministic core —
+The pytest suite (84 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
-routing, rerouting and clarification, store conformance across
-the SQLite and in-memory profiles (the PostgreSQL leg runs when
-`CX_TEST_DATABASE_URL` names a scratch database).
+routing, rerouting and clarification, billing depth, store
+conformance across the SQLite and in-memory profiles (the
+PostgreSQL leg runs when `CX_TEST_DATABASE_URL` names a scratch
+database).
 
 ## Layout
 
@@ -192,13 +198,16 @@ src/cx_agent/
   documents.py     the deterministic hashing embedder (384-dim)
   llm.py           the provider boundary + offline composer
   money.py         Decimal money math: proration, credits
+  billing_book.py  the billing ledger: decomposition, comparison,
+                   bill shock, per-line dispute cases, credit history
+  clock.py         the one shared clock (CX_TODAY pins it)
   dataset.py       the Northbeam book, generated in code
   store.py         store port: PostgreSQL, SQLite, in-memory
   objects.py       S3 transcript exports (SigV4, no SDK)
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (31 trajectories) + run_evals.py
+evals/             scenarios.jsonl (41 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```
@@ -214,10 +223,9 @@ into the records themselves.
   per account so tests and evals can verify the flow. A production
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
-- Specialists are still on their happy paths in places. Deeper
-  dispute tiers, retention flows and the daily quality pass are
-  designed (see `docs/architecture.md`) and land in later
-  rounds.
+- Specialists are still on their happy paths in places.
+  Retention flows and the daily quality pass are designed
+  (see `docs/architecture.md`) and land in later rounds.
 - The offline fallback drafts competently from findings because
   the findings are written as sentences; it does not understand
   free-form customer language the way a model does. Routing and

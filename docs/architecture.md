@@ -152,7 +152,7 @@ transactional desk on a guess.
 
 | Desk | Tools it works with | What it can propose |
 |---|---|---|
-| billing | bill record, dispute evidence markers, credit policy | `apply_credit` (dispute or goodwill class) |
+| billing | bill history, dispute cases, credit policy + trailing credit history | `apply_credit` (dispute or goodwill class) |
 | roaming | account roaming state, offer catalogue, fair-use policy | `activate_offer` (Roam Pass) |
 | offers | plan catalogue, loyalty offer, proration engine | `change_plan` |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
@@ -162,8 +162,21 @@ transactional desk on a guess.
 Dispute evidence is a property of the bill, computed in code:
 a charge marked as a duplicate of another, a charge levied after
 cancellation, or a charge above its expected rate. The billing
-desk credits exactly the evidenced total — no more, because the
-number came from the record; no less, for the same reason.
+desk decides each disputed line on that evidence — evidenced
+lines credit for exactly the evidenced amount (the excess only,
+on a wrong rate); lines the customer names but the record clears
+decline with the reason in plain words — and persists the whole
+assessment as a dispute case that settles when the customer
+answers the proposed credit (decided_credit, decided_partial,
+declined_with_reason, escalated_above_cap). Explanations are
+computed the same way: the bill decomposes into charge families
+with totals and month-on-month deltas against the previous bill,
+and a total that jumps the bill-shock threshold over the trailing
+average leads with the family the deltas indict. Goodwill runs on
+a separate tier with a memory: the account's executed credits in
+the trailing 90 days bound what may be offered, a refusal is
+recorded with its reason, and the evidenced path is never
+throttled by the goodwill history.
 
 Procedures are data (`dataset.build_procedures`): ordered steps,
 each with the condition that resolves it and an `on_fail` path
@@ -226,7 +239,7 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 37 scripted
+The eval pack grades trajectories, not replies: 41 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
@@ -235,7 +248,11 @@ statuses). The trajectories include the round-2 desk discipline:
 a proposal retired by a reroute and never executed, verification
 surviving a change of desk, a clarification resolved by its
 answer and one ignored and committed on without a second
-question. The rubrics encode the production rules:
+question. Round 3 adds the billing outcomes: a partial dispute
+settling its case with exactly the evidenced line credited, a
+goodwill refusal that moves no money, a bill-shock lead, and an
+over-cap dispute escalated with its case intact. The rubrics
+encode the production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
   stuck is a transfer; threat/fraud/legal/vulnerable are immediate.
@@ -280,8 +297,8 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes rounds 1–2 (core, then rerouting and
-clarification). The scheduled deepening — dispute tiers, the
+This document describes rounds 1–3 (core; rerouting and
+clarification; billing depth). The scheduled deepening — the
 retention flow, failure attribution and the annotation queue,
 conversation-signal extraction, the daily quality pass, the
 prompt registry, handoff scoring, cost budgets — is laid out in
