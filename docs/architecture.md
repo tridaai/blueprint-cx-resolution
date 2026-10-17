@@ -515,12 +515,12 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 117 scripted
+The eval pack grades trajectories, not replies: 127 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
 the escalation queue, the reroute audit count, action-record
-statuses). Seventy-one are hand-written; the rest are generated
+statuses). Eighty-one are hand-written; the rest are generated
 and attacked (round 9, below). The report breaks the results
 down by rubric, by persona, and by adversarial class, so a
 regression localises to a customer style or an attack type. The trajectories include the round-2 desk discipline:
@@ -631,16 +631,70 @@ LLM backend, and whether S3 is configured.
   basis" — the honest answer is an unhandled-intent log and an
   offer of a human, never a plausible-sounding stretch.
 
+## Failure attribution and the annotation queue
+
+A conversation's audit trail already records how it ended; round
+10 makes that a record of its own. Attribution is a rule chain
+over the trail and the sibling records — audit events, action
+records, dispute cases, procedure runs, the closing escalation —
+evaluated in a fixed order, because the order is the argument: an
+internal-error event (written by the service when a turn crashes)
+outranks everything; a verification lockout outranks the
+desk-level stories; a policy cap or refusal outranks the
+procedure's account of itself; a walk that exhausted, escalated
+from inside a procedure, or stalled into a no-progress escalation
+is a procedure dead end; and only then may an escalation be
+called what it often is — designed behaviour (a threat, a fraud
+report, a legal matter, a vulnerability, the customer's second
+ask for a human), which earns no cause. What remains reads, in
+order: verification abandoned mid-step, a conversation rerouted
+twice or more with nothing executed, a need the care desk logged
+as unhandled (or the router's low-confidence fallback), and work
+left pending — a proposal unanswered, a walk mid-step — which is
+the customer leaving. The outcome is read alongside: escalated
+from the record; resolved-with-action when something executed
+and nothing is pending; resolved; and unresolved-ended for
+everything else, including a record marked resolved whose last
+word is still an unanswered proposal. Each record names the rule
+that fired and carries the signals it read, so the attribution
+can be re-derived — or disputed — from the record alone.
+
+Two operator acts write records, in the pattern of the complaint
+watch: a pass attributes every conversation that has closed and
+has no record yet (a record, once written, stands), and a
+single-conversation attribution covers the ones that merely
+stopped, which is how a walk-away gets its record. The report
+aggregates by cause × desk over a window with the previous
+window beside it, reconciles exactly against the records, and
+joins the unhandled-intent mining candidates to the attributed
+causes of their member conversations — the two failure lenses
+reading the same evidence.
+
+The annotation queue is the human loop over the records: every
+escalated or unresolved conversation is queued, plus resolved
+ones by a deterministic sample (a stable hash of the
+conversation id against a policy modulus), so the successes are
+audited too without drowning the reviewers. An annotation marks
+the attributed cause right, or corrects it from the same
+taxonomy (a correction is required exactly then); a second
+annotation must come from a different annotator; agreement
+between the first two is reported as a simple rate and as
+Cohen's kappa over the cause labels; and where they disagree, a
+third person's annotation — the verdict — settles the record
+and closes it. No automation reads any of it. It is the
+evidence base from which humans fix routing, raise a cap, or
+design the intent the mining pass keeps pointing at.
+
 ## Round map
 
-This document describes rounds 1–9 (core; rerouting and
+This document describes rounds 1–10 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
-adversarial eval expansion). The scheduled deepening — the
-retention flow, failure attribution and the annotation queue,
-conversation-signal extraction, the daily quality pass, the
-prompt registry, handoff scoring, cost budgets — is laid out in
-the blueprint backlog; the architecture above is shaped so each
-lands as a new node, desk behavior, or report over the same
-records, not as a rewrite.
+adversarial eval expansion; failure attribution and the
+annotation queue). The scheduled deepening — the retention
+flow, conversation-signal extraction, the daily quality pass,
+the prompt registry, handoff scoring, cost budgets — is laid
+out in the blueprint backlog; the architecture above is shaped
+so each lands as a new node, desk behavior, or report over the
+same records, not as a rewrite.

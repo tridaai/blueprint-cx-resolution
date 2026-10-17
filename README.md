@@ -172,6 +172,28 @@ open http://localhost:8000              # the operator console
   conversations that ended unhandled are mined offline into
   candidate intents for a human to design (`cx-agent
   intent-mining`) — a report, never an auto-created intent.
+## Why conversations end
+
+Every closed conversation gets a record of how it ended,
+computed in code from its own audit trail: the outcome
+(resolved, resolved with an action, escalated, or ended
+unresolved) and, for the endings that weren't resolutions, one
+primary cause from a governed taxonomy — routing error,
+identity friction, policy limit, missing capability, procedure
+dead end, the customer leaving, a system error — with the rule
+that fired and the signals it read carried on the record. An
+escalation the rules demanded (a threat, a second ask for a
+human) is recorded as designed, not as a failure. The report
+aggregates cause × desk over a window against the previous one
+(`cx-agent attribution`), and joins the mining candidates to
+the causes their conversations earned. Humans review the calls
+in an **annotation queue**: every escalated or unresolved
+conversation, plus a deterministic sample of the resolved ones;
+two annotators who can't be the same person, agreement and
+Cohen's kappa over the cause labels, and a third person's
+verdict where they disagree. Nothing in the loop acts on its
+own — it is evidence for the humans designing desks and
+intents.
 
 ## The rules are code
 
@@ -230,10 +252,10 @@ open http://localhost:8000              # the operator console
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **117 scripted multi-turn conversations** played
+behavioral: **127 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care. Seventy-one are hand-written persona trajectories
+identity, care, attribution. Eighty-one are hand-written persona trajectories
 (the refund seeker, the human-demander, the fragment writer, the
 AI skeptic, the confused elder, non-native phrasing). Thirty-five
 more are the **persona matrix**: seven difficult-customer
@@ -249,7 +271,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1027/1027 assertions, 758/758 zero-tolerance. The
+the tree: 1078/1078 assertions, 799/799 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -259,10 +281,11 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (187 tests) covers the deterministic core —
+The pytest suite (217 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
-transactions, care records and the mining pass, the confirmation
+transactions, care records and the mining pass, failure
+attribution and the annotation queue, the confirmation
 re-ask regressions, store conformance across the SQLite and
 in-memory profiles (the PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
@@ -295,6 +318,11 @@ src/cx_agent/
   mining.py        the unhandled-intent mining pass: clusters
                    the conversations that ended unhandled into
                    candidate intents (a report; creates nothing)
+  attribution.py   failure attribution + the annotation queue:
+                   outcome and cause computed from the audit
+                   trail in code, the windowed cause × desk
+                   report with the mining join, and the human
+                   review loop (annotations, agreement, verdicts)
   procedures.py    the troubleshooting engine: procedures as
                    versioned data, runs, tools, branches, safety
                    steps, transcript-carrying callbacks
