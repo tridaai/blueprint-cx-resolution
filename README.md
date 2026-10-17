@@ -107,10 +107,16 @@ open http://localhost:8000              # the operator console
 - **Offers & plan changes** — eligibility and proration computed
   in code; the customer sees the credit, the charge and the net
   before confirming anything.
-- **Technical support** — guided procedures walked as step-graphs:
-  agent-side checks run as tools, each customer step is confirmed
-  before the next, and exhausting the steps books a technician
-  callback instead of improvising.
+- **Technical support** — guided procedures as versioned data,
+  walked by one engine: agent-side checks (coverage, allowance,
+  a network line test) run as tools whose results branch the
+  walk, customer-reported measurements are compared against
+  thresholds in code, and mandatory safety steps refuse to be
+  skipped. Every walk is a stored run with its full step
+  history — leave mid-procedure and it resumes at the exact
+  step — and exhausting the steps books a technician callback
+  as a record carrying the whole step transcript, instead of
+  improvising.
 - **Account & payments** — card replacement and payment
   arrangements behind full identity verification; only the last
   four digits of a card ever appear.
@@ -200,6 +206,9 @@ src/cx_agent/
   money.py         Decimal money math: proration, credits
   billing_book.py  the billing ledger: decomposition, comparison,
                    bill shock, per-line dispute cases, credit history
+  procedures.py    the troubleshooting engine: procedures as
+                   versioned data, runs, tools, branches, safety
+                   steps, transcript-carrying callbacks
   clock.py         the one shared clock (CX_TODAY pins it)
   dataset.py       the Northbeam book, generated in code
   store.py         store port: PostgreSQL, SQLite, in-memory
@@ -207,7 +216,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (41 trajectories) + run_evals.py
+evals/             scenarios.jsonl (47 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```

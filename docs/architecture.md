@@ -178,13 +178,56 @@ the trailing 90 days bound what may be offered, a refusal is
 recorded with its reason, and the evidenced path is never
 throttled by the goodwill history.
 
-Procedures are data (`dataset.build_procedures`): ordered steps,
-each with the condition that resolves it and an `on_fail` path
-(next / callback). Steps the agent can test itself (coverage,
-allowance) run as tools and never reach the customer as questions.
-A step whose check *is* the symptom disappearing (signal restored,
-speed restored, call connected) ends the procedure on success;
-set-up steps (switching Wi-Fi calling on) advance on success.
+## The troubleshooting engine
+
+Procedures are versioned data (`dataset.build_procedures`), and
+one walker (`procedures.py`) interprets them: editing a
+procedure's record — its steps, thresholds, branch table — is a
+data change (a new version), never a code change. A walk is a
+**procedure run**, a store record of its own holding the
+procedure and version it pinned, the step it waits on, and a
+step record for everything that happened; the conversation's
+specialist state holds only the run's id. The step kinds:
+
+- **tool_check** — the agent tests a condition itself (coverage,
+  allowance, the network line test). Tools read the book and
+  report a result word; the step's branch table routes on it.
+  A tool with nothing to read reports its neutral result — it
+  never invents one.
+- **instruction** — the customer acts and reports success / fail
+  / unclear, classified in code. A step whose check *is* the
+  symptom disappearing (signal restored, speed restored, call
+  connected) ends the walk on success; set-up steps (switching
+  Wi-Fi calling on) advance.
+- **measurement** — the customer reports a value (a speed test);
+  it is parsed and compared against the step's threshold in
+  code, and the comparison selects the path.
+- **branch** — a named rule over the run's recorded results
+  (e.g. the last speed against a hard threshold) picks the
+  next step.
+- **terminal** — resolved, book_callback, or
+  escalate_field_visit (an engineer visit is a human's booking;
+  the conversation escalates with the record).
+
+A step flagged `mandatory_safety` (the broadband power-cycle)
+completes only on success: a skip attempt or an outright refusal
+is refused in code, recorded on the run, and the step stays
+current; a second insistence ends the walk and escalates. If the
+conversation leaves the desk mid-procedure — a billing question,
+say — the run simply waits: routing hands outcome-shaped replies
+back to the technical desk, an identity detour raised by another
+desk is dropped when the customer returns to the walk, and the
+walk resumes at its exact step with its history intact. If the
+conversation escalates, the run closes as abandoned, history
+attached.
+
+Exhausting a procedure books its callback as a **callback
+record** — the sibling of the dispute case — created at the
+dead end with the run's full step transcript and settled when
+the customer answers the booking proposal (booked, with the
+executed action's id, or declined / blocked). The console and
+`/callbacks` show the record, so the technician starts from the
+transcript, not from zero.
 
 ## Identity
 
@@ -239,7 +282,7 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 41 scripted
+The eval pack grades trajectories, not replies: 47 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
@@ -251,8 +294,13 @@ answer and one ignored and committed on without a second
 question. Round 3 adds the billing outcomes: a partial dispute
 settling its case with exactly the evidenced line credited, a
 goodwill refusal that moves no money, a bill-shock lead, and an
-over-cap dispute escalated with its case intact. The rubrics
-encode the production rules:
+over-cap dispute escalated with its case intact. Round 4 adds
+the technical rubric: a line-test result branching to a field
+visit, a reported speed taking the fault path below threshold
+and the resolved path above it, a dead-ended procedure whose
+callback record carries every step's result, a walk resumed at
+its exact step after a billing detour, and a safety step that
+refuses a skip. The rubrics encode the production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
   stuck is a transfer; threat/fraud/legal/vulnerable are immediate.
@@ -266,10 +314,14 @@ encode the production rules:
 - **identity** — the machine's states, including lockout.
 - **care** — the catch-all answers what it can and logs what it
   can't.
+- **technical** — procedures branch on tool results, measurements
+  decide in code, dead ends book transcript-carrying callbacks,
+  safety steps cannot be skipped.
 
 Zero-tolerance assertions (escalation decisions, action
-execution, money/plan state, identity state) must pass at 100%;
-the overall bar is 95%. The pack runs offline by default in about
+execution, money/plan state, identity state, and the procedure
+record-keeping — step order, callback presence, transcript
+contents) must pass at 100%; the overall bar is 95%. The pack runs offline by default in about
 four seconds, which is what makes it a gate rather than a report.
 
 ## Stores and deployment
