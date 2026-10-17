@@ -43,7 +43,9 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("offer", 3), ("upgrade", 3), ("deal", 2), ("discount", 3),
         ("promotion", 3), ("change my plan", 4), ("change plan", 4),
         ("switch plan", 4), ("switch to", 2), ("new plan", 3),
-        ("better plan", 3), ("unlimited max", 2),
+        ("better plan", 3), ("unlimited max", 2), ("downgrade", 3),
+        ("cheaper plan", 3), ("undo", 3), ("change back", 3),
+        ("revert", 3), ("reverse", 2),
     ],
     Intent.TECHNICAL: [
         ("no signal", 4), ("no service", 4), ("signal", 2),

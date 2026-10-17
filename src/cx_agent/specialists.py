@@ -29,8 +29,9 @@ from .billing_book import (
     note_goodwill_refusal,
     open_dispute_case,
 )
+from .clock import today
 from .config import Policy
-from .money import fmt, plan_change_net
+from .money import fmt
 from .models import (
     ActionKind,
     Conversation,
@@ -38,7 +39,7 @@ from .models import (
     ProposedAction,
     SpecialistResult,
 )
-from . import procedures
+from . import plan_changes, procedures
 
 
 @dataclass
@@ -432,7 +433,8 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 
 
 # ---------------------------------------------------------------------------
-# Offers & plan changes
+# Offers & plan changes — quoted, versioned, reversible (round 5:
+# see plan_changes.py for the transaction rules themselves)
 # ---------------------------------------------------------------------------
 
 
@@ -452,6 +454,268 @@ def _target_plan(text: str, ctx: Ctx):
     return None
 
 
+_REVERSAL_WORDS = ("undo", "reverse", "revert", "change it back",
+                   "change back", "put it back", "put me back")
+
+# A downgrade or cancellation the customer blames on a fault is not
+# a price question at all: the billing desk's dispute path owns it
+# (POL-PLAN-02), and this desk routes it there instead of pricing
+# an exit the fault may yet fix.
+_FAULT_MARKERS = ("fault", "broken", "breaking", "not working",
+                 "never worked", "no service", "outage", "unusable",
+                 "keeps dropping")
+
+
+def _fault_cited(lowered: str) -> bool:
+    return any(marker in lowered for marker in _FAULT_MARKERS)
+
+
+def _proposal_version(conv: Conversation, ctx: Ctx) -> int:
+    """Proposals are versioned per conversation: the count of
+    plan-change records already on it, plus one."""
+    prior = [r for r in ctx.store.list_actions(conv.conversation_id)
+             if r.kind == ActionKind.CHANGE_PLAN]
+    return len(prior) + 1
+
+
+def _net_line(net: Decimal) -> str:
+    if net > 0:
+        return f"Net adjustment on your next bill: {fmt(net)} due."
+    if net < 0:
+        return f"Net adjustment on your next bill: a {fmt(-net)} credit."
+    return "Net adjustment on your next bill: $0.00."
+
+
+def _change_result(conv: Conversation, ctx: Ctx, account,
+                   target) -> SpecialistResult:
+    """The plan-change proposal, quoted off the cycle calendar.
+
+    The quote (plan_changes.quote_change) decides the shape by
+    policy: an upgrade starts now, prorated, with the projected
+    next bill stated; a downgrade is scheduled at the next cycle
+    boundary with no proration. Either way the proposal is a
+    versioned record stamped with the fingerprint of the account
+    state it was priced against, and execution re-checks it."""
+    current = ctx.store.get_plan(account.plan_id)
+    if current.plan_id == target.plan_id:
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(topic="same_plan",
+                              text=f"You're already on {target.name}.")],
+            progress=True, resolved=True)
+    customer = ctx.store.get_customer(conv.customer_id)
+    loyalty = ctx.store.get_offer("OFF-UPG-LOYAL")
+    new_price = target.monthly_price
+    basis = "Standard plan change under POL-PLAN-01."
+    if (loyalty and loyalty.target_plan_id == target.plan_id
+            and account.plan_id in loyalty.eligible_plan_ids
+            and customer and customer.tenure_months >= 12):
+        new_price = loyalty.monthly_price
+        basis = (f"Loyalty upgrade OFF-UPG-LOYAL: {fmt(new_price)}/month "
+                 f"instead of {fmt(target.monthly_price)} (tenure "
+                 f"{customer.tenure_months} months).")
+    quote = plan_changes.quote_change(account, current, target, new_price)
+    payload = {
+        "new_plan_id": target.plan_id,
+        "old_plan_id": current.plan_id,
+        "new_price": str(new_price), "net": str(quote.net),
+        "credit": str(quote.credit), "charge": str(quote.charge),
+        "direction": quote.direction, "effective": quote.effective,
+        "effective_date": quote.effective_date,
+        "cycle_start": quote.cycle_start, "cycle_end": quote.cycle_end,
+        "days_remaining": quote.days_remaining,
+        "days_in_cycle": quote.days_in_cycle,
+        "next_bill_impact": str(quote.next_bill_impact),
+        "proposal_version": _proposal_version(conv, ctx),
+        "issued_date": today().isoformat(),
+        "fingerprint": plan_changes.account_fingerprint(account),
+        "fingerprint_parts": plan_changes.fingerprint_parts(account),
+    }
+    if quote.effective == "next_cycle":
+        findings = [Finding(
+            topic="plan_change",
+            text=(f"Moving from {current.name} "
+                  f"({fmt(current.monthly_price)}/month) down to "
+                  f"{target.name} ({fmt(new_price)}/month) is a downgrade, "
+                  "and downgrades start at the next cycle rather than "
+                  "today: there is no proration on a downgrade, and you "
+                  "keep the plan you've already paid for until this "
+                  "cycle ends."))]
+        must_include = [
+            f"{target.name} takes effect on {quote.effective_date} "
+            "(the start of your next cycle).",
+            f"Until then you stay on {current.name}; from "
+            f"{quote.effective_date}, {target.name} is "
+            f"{fmt(new_price)}/month.",
+            "No charge or credit applies to this change.",
+        ]
+        return SpecialistResult(
+            specialist="offers", findings=findings,
+            proposed_action=ProposedAction(
+                kind=ActionKind.CHANGE_PLAN,
+                summary=(f"change your plan to {target.name} at "
+                         f"{fmt(new_price)}/month from "
+                         f"{quote.effective_date}"),
+                payload=payload, amount=Decimal("0"),
+                basis=basis + " Downgrade under POL-PLAN-02: next-cycle "
+                              "start, no proration."),
+            citations=_cite(ctx, "plans",
+                            "downgrade next cycle no proration plan change"),
+            must_include=must_include, progress=True)
+    findings = [Finding(
+        topic="plan_change",
+        text=(f"Switching from {current.name} ({fmt(current.monthly_price)}/month) "
+              f"to {target.name} ({fmt(new_price)}/month) now, with "
+              f"{quote.days_remaining} days left in this cycle "
+              f"(it runs to {quote.cycle_end}), works out as follows."))]
+    must_include = [
+        f"Credit for the unused part of {current.name}: {fmt(quote.credit)}",
+        f"Charge for {target.name} for the remaining "
+        f"{quote.days_remaining} days: {fmt(quote.charge)}",
+        _net_line(quote.net),
+        f"Projected next bill: {fmt(quote.next_bill_impact)} — the net "
+        f"adjustment above plus the first full month of {target.name} "
+        f"at {fmt(new_price)}.",
+        f"From the next cycle, {target.name} is {fmt(new_price)}/month.",
+    ]
+    return SpecialistResult(
+        specialist="offers", findings=findings,
+        proposed_action=ProposedAction(
+            kind=ActionKind.CHANGE_PLAN,
+            summary=(f"change your plan to {target.name} at "
+                     f"{fmt(new_price)}/month, effective now"),
+            payload=payload, amount=quote.net, basis=basis),
+        citations=_cite(ctx, "plans", "plan change prorated credit charge confirm"),
+        must_include=must_include, progress=True)
+
+
+def _reversal_result(conv: Conversation, ctx: Ctx,
+                     account) -> SpecialistResult:
+    """'Undo that change': inside the reversal window the desk
+    proposes the compensating pair; outside it, the request goes
+    to the offers team with the change record attached — the agent
+    does not improvise a reversal policy won't cover."""
+    citations = _cite(ctx, "plans", "plan change reversed same day undo")
+    orig = plan_changes.latest_executed_change(ctx.store,
+                                                account.account_number)
+    if orig is None:
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(
+                topic="no_change_to_reverse",
+                text=("There's no plan change on your account for me to "
+                      "undo — your plan is what it has been."))],
+            citations=citations, progress=True)
+    old_plan = ctx.store.get_plan(orig.payload.get("old_plan_id", ""))
+    new_plan = ctx.store.get_plan(orig.payload.get("new_plan_id", ""))
+    old_name = old_plan.name if old_plan else "your previous plan"
+    new_name = new_plan.name if new_plan else "the new plan"
+    pair = plan_changes.reversal_of(ctx.store, orig)
+    if pair:
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(
+                topic="already_reversed",
+                text=(f"That change was already reversed on "
+                      f"{pair[0].created_date}: {old_name} was restored "
+                      "and the money unwound then, so there's nothing "
+                      "left to undo."))],
+            citations=citations, progress=True)
+    if not plan_changes.within_reversal_window(orig, ctx.policy):
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(
+                topic="reversal_outside_window",
+                text=(f"You changed to {new_name} on {orig.created_date} "
+                      f"(change record {orig.action_id}: {orig.summary}). "
+                      "A change can be reversed from here on the day it "
+                      "was made, and that day has passed — so I'm passing "
+                      "this to our offers team with that change record "
+                      "attached, and they can still sort it out."))],
+            citations=citations, progress=True,
+            escalate_reason="plan_reversal_outside_window",
+            escalate_queue="offers")
+    orig_net = Decimal(str(orig.payload.get("net", "0")))
+    scheduled = orig.payload.get("effective") == "next_cycle"
+    if scheduled:
+        summary = (f"cancel the scheduled change to {new_name} and "
+                   f"keep {old_name}")
+        must_include = [
+            f"The scheduled change to {new_name} is cancelled — you "
+            f"stay on {old_name}, and no money was ever moved for it."]
+        amount = Decimal("0")
+    else:
+        summary = (f"reverse the change to {new_name} and put you "
+                   f"back on {old_name}")
+        must_include = [
+            f"Reversal: {old_name} is restored from today, and the "
+            f"{fmt(orig_net)} net adjustment from the change is "
+            "unwound — your balance goes back to what it was "
+            "before it."]
+        amount = -orig_net
+    payload = {
+        "reversal_of": orig.action_id,
+        "restore_plan_id": orig.payload.get("old_plan_id", ""),
+        "new_plan_id": orig.payload.get("new_plan_id", ""),
+        "orig_net": str(orig_net), "unwind_net": str(-orig_net),
+        "net": str(-orig_net),
+        "effective": orig.payload.get("effective", "immediate"),
+        "proposal_version": _proposal_version(conv, ctx),
+        "issued_date": today().isoformat(),
+        "fingerprint": plan_changes.account_fingerprint(account),
+        "fingerprint_parts": plan_changes.fingerprint_parts(account),
+    }
+    return SpecialistResult(
+        specialist="offers", findings=[Finding(
+            topic="plan_reversal",
+            text=(f"I can undo that change — it was made today, so "
+                  f"it's inside the reversal window."))],
+        proposed_action=ProposedAction(
+            kind=ActionKind.CHANGE_PLAN, summary=summary,
+            payload=payload, amount=amount,
+            basis=(f"Reversal of {orig.action_id} ({orig.summary}) "
+                   "inside the reversal window (POL-PLAN-02).")),
+        citations=citations, must_include=must_include, progress=True)
+
+
+def refresh_plan_change(conv: Conversation, ctx: Ctx,
+                        pending) -> SpecialistResult:
+    """Rebuild a plan-change proposal that execution refused as
+    stale. The figures are re-quoted from the live account — the
+    same desk logic, not a re-read of the stale payload — and the
+    result leads with what moved, so the customer re-confirms
+    knowing exactly why they're being asked again."""
+    account = _account(ctx, conv)
+    lead = Finding(
+        topic="stale_proposal",
+        text=("That proposal went stale before it could run: your "
+              "account changed after I priced it, so its figures no "
+              "longer match your account. Nothing was applied."))
+    if account is None:
+        return SpecialistResult(specialist="offers", findings=[lead],
+                                progress=True)
+    moved = plan_changes.fingerprint_diff(
+        account, pending.payload.get("fingerprint_parts", {}))
+    if moved:
+        lead = Finding(
+            topic="stale_proposal",
+            text=("That proposal went stale before it could run — "
+                  + "; ".join(moved) +
+                  " after I priced it, so its figures no longer match "
+                  "your account. Nothing was applied. Here is the same "
+                  "request priced fresh:"))
+    if pending.payload.get("reversal_of"):
+        fresh = _reversal_result(conv, ctx, account)
+    else:
+        target = ctx.store.get_plan(pending.payload.get("new_plan_id", ""))
+        if target is None:
+            return SpecialistResult(specialist="offers", findings=[lead],
+                                    progress=True)
+        fresh = _change_result(conv, ctx, account, target)
+    fresh.findings = [lead] + fresh.findings
+    return fresh
+
+
 def offers(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     # "How does a plan change work?" is a question, not an order:
     # answer it from the plan policy instead of listing offers.
@@ -465,64 +729,62 @@ def offers(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                 findings=[Finding(topic="policy", text=d["text"]) for d in docs],
                 citations=[d["doc_id"] for d in docs],
                 progress=True, resolved=True)
+    lowered = lowered0
+    # "Undo that change" is its own transaction, not a new change:
+    # it is priced off the change record, inside or outside the
+    # reversal window — never off the catalogue.
+    if any(w in lowered for w in _REVERSAL_WORDS):
+        if not conv.account_number:
+            return _needs_identity("offers", _IDENTITY_ASK)
+        account = _account(ctx, conv)
+        if account is None:
+            return _needs_identity("offers", _IDENTITY_ASK)
+        return _reversal_result(conv, ctx, account)
     target = _target_plan(text, ctx)
     wants_change = target is not None or any(
-        w in text.lower() for w in ("upgrade", "change", "switch"))
+        w in lowered for w in ("upgrade", "change", "switch", "downgrade"))
     if wants_change and target is not None:
         if not conv.account_number:
             return _needs_identity("offers", _IDENTITY_ASK)
         account = _account(ctx, conv)
         current = ctx.store.get_plan(account.plan_id)
-        if current.plan_id == target.plan_id:
+        if _fault_cited(lowered) and \
+                target.monthly_price < current.monthly_price:
             return SpecialistResult(
                 specialist="offers",
-                findings=[Finding(topic="same_plan",
-                                  text=f"You're already on {target.name}.")],
-                progress=True, resolved=True)
-        customer = ctx.store.get_customer(conv.customer_id)
-        loyalty = ctx.store.get_offer("OFF-UPG-LOYAL")
-        new_price = target.monthly_price
-        basis = f"Standard plan change under POL-PLAN-01."
-        if (loyalty and loyalty.target_plan_id == target.plan_id
-                and account.plan_id in loyalty.eligible_plan_ids
-                and customer and customer.tenure_months >= 12):
-            new_price = loyalty.monthly_price
-            basis = (f"Loyalty upgrade OFF-UPG-LOYAL: {fmt(new_price)}/month "
-                     f"instead of {fmt(target.monthly_price)} (tenure "
-                     f"{customer.tenure_months} months).")
-        days_remaining = account.cycle_days - account.cycle_day
-        proration = plan_change_net(current.monthly_price, new_price,
-                                    days_remaining, account.cycle_days)
-        net = proration["net"]
-        net_line = (
-            f"Net adjustment on your next bill: {fmt(net)} due."
-            if net > 0 else
-            f"Net adjustment on your next bill: a {fmt(-net)} credit."
-            if net < 0 else "Net adjustment on your next bill: $0.00.")
-        findings = [Finding(
-            topic="plan_change",
-            text=(f"Switching from {current.name} ({fmt(current.monthly_price)}/month) "
-                  f"to {target.name} ({fmt(new_price)}/month) now, with "
-                  f"{days_remaining} days left in this cycle, works out as follows."))]
-        must_include = [
-            f"Credit for the unused part of {current.name}: {fmt(proration['credit_for_old_plan'])}",
-            f"Charge for {target.name} for the remaining {days_remaining} days: {fmt(proration['charge_for_new_plan'])}",
-            net_line,
-            f"From the next cycle, {target.name} is {fmt(new_price)}/month.",
-        ]
+                findings=[Finding(
+                    topic="fault_handoff",
+                    text=("If the service itself is at fault, that's "
+                          "not a plan change to price here — a "
+                          "downgrade because of a fault belongs to "
+                          "our billing team under the dispute policy, "
+                          "so the fault and the charges get looked at "
+                          "together. I'm passing this to them now "
+                          "with what you've described attached."))],
+                citations=_cite(ctx, "plans",
+                                "fault downgrade cancellation billing dispute"),
+                progress=True,
+                escalate_reason="fault_cancellation_dispute_path",
+                escalate_queue="billing")
+        return _change_result(conv, ctx, account, target)
+    if "cancel" in lowered and _fault_cited(lowered):
+        if not conv.account_number:
+            return _needs_identity("offers", _IDENTITY_ASK)
         return SpecialistResult(
-            specialist="offers", findings=findings,
-            proposed_action=ProposedAction(
-                kind=ActionKind.CHANGE_PLAN,
-                summary=(f"change your plan to {target.name} at "
-                         f"{fmt(new_price)}/month, effective now"),
-                payload={"new_plan_id": target.plan_id,
-                         "new_price": str(new_price), "net": str(net),
-                         "credit": str(proration["credit_for_old_plan"]),
-                         "charge": str(proration["charge_for_new_plan"])},
-                amount=net, basis=basis),
-            citations=_cite(ctx, "plans", "plan change prorated credit charge confirm"),
-            must_include=must_include, progress=True)
+            specialist="offers",
+            findings=[Finding(
+                topic="fault_handoff",
+                text=("Leaving because of a fault is the billing "
+                      "team's case, not a plan change — they own "
+                      "fault cancellations under the dispute policy, "
+                      "so the fault and the charges get looked at "
+                      "together. I'm passing this to them now with "
+                      "what you've described attached."))],
+            citations=_cite(ctx, "plans",
+                            "fault downgrade cancellation billing dispute"),
+            progress=True,
+            escalate_reason="fault_cancellation_dispute_path",
+            escalate_queue="billing")
 
     # Browse: what's available.
     findings = []
