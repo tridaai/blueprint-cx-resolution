@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from . import care_book, payments_book, roaming_book
-from .routing import classify_confirmation
+from .routing import analyze, classify_confirmation
 from .billing_book import (
     assess_dispute,
     bill_shock,
@@ -474,8 +474,32 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     # buy verb completes the purchase path the guard deferred; a
     # refusal closes it with nothing added; anything else is a
     # new topic and falls through to be handled on its own terms.
-    if state.pop("awaiting_decision", None) == "activate_pass":
+    if state.get("awaiting_decision") == "activate_pass":
         verdict = classify_confirmation(text)
+        if verdict == "other" and not strong_buy and not soft_buy \
+                and rate_row is None and days is None \
+                and not analyze(text).scores:
+            # An answer we cannot read — a hesitant "um, yes I
+            # think so", a fragment — is not a new topic: it
+            # carries no signal of one (no destination, no day
+            # count, no desk phrases at all). Falling through
+            # would spend the marker all the same, and the
+            # decision the guard deferred would be gone: the
+            # cheaper pass the customer was mid-answer to could
+            # never be bought, and their plain "yes" a turn later
+            # would land nowhere. The decision stays open, the
+            # floor stays ours, and the question is asked again,
+            # plainly.
+            conv.specialist_state["force_intent"] = "roaming"
+            return result(
+                findings=[Finding(
+                    topic="bill_shock_guard",
+                    text=("Just so I have it straight — shall I add "
+                          "the Roam Pass, the cheaper option from "
+                          "those figures? A yes or a no is all I "
+                          "need."))],
+                progress=False)
+        state.pop("awaiting_decision", None)
         if verdict == "decline":
             return result(
                 findings=[Finding(
