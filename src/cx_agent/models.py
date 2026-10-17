@@ -171,7 +171,7 @@ class ActionRecord(BaseModel):
     payload: dict = Field(default_factory=dict)
     amount: Decimal | None = None
     basis: str = ""
-    status: str = "proposed"  # proposed | executed | declined | blocked
+    status: str = "proposed"  # proposed | executed | declined | blocked | superseded
     block_reason: str = ""
     turn: int = 0
 
@@ -272,6 +272,6 @@ class TurnResult(BaseModel):
 class AuditEvent(BaseModel):
     event_id: str
     conversation_id: str
-    kind: str  # turn | identity | action | escalation | screening
+    kind: str  # turn | identity | action | escalation | screening | reroute
     detail: dict = Field(default_factory=dict)
     turn: int = 0

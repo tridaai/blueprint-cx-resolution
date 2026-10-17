@@ -40,7 +40,14 @@ from .models import (
     SpecialistResult,
     TurnResult,
 )
-from .routing import classify_confirmation, classify_step_outcome, route, score_intents
+from .routing import (
+    READINGS,
+    analyze,
+    classify_confirmation,
+    classify_step_outcome,
+    resolve_clarification,
+    route,
+)
 from .screening import Screening, screen
 from .specialists import Ctx, account, billing, care, offers, roaming, technical
 
@@ -77,6 +84,8 @@ class TurnState(TypedDict, total=False):
     action_record: object
     escalated: bool
     first_human_ask: bool
+    routing: dict  # the router's evidence for this turn (see routing.analyze)
+    clarification_resolved: bool
     turn_result: TurnResult
     next: str  # dispatch scratch: escalate | identity | confirm | route | post | compose
 
@@ -109,7 +118,8 @@ class Supervisor:
                                 {"post": "post", "route": "route", "escalate": "escalate"})
         g.add_conditional_edges("confirm", lambda s: s["next"],
                                 {"post": "post", "route": "route"})
-        g.add_edge("route", "specialist")
+        g.add_conditional_edges("route", lambda s: s["next"],
+                                {"specialist": "specialist", "post": "post"})
         g.add_edge("specialist", "post")
         g.add_conditional_edges("post", lambda s: s["next"],
                                 {"compose": "compose", "escalate": "escalate"})
@@ -274,6 +284,7 @@ class Supervisor:
             self._audit(conv, "action", {"action_id": record.action_id,
                                          "status": "declined"})
             conv.pending_action = None
+            conv.specialist_state.pop("pending_desk", None)
             state["action_record"] = record
             state["result"] = SpecialistResult(
                 specialist="supervisor",
@@ -308,6 +319,7 @@ class Supervisor:
         record = action_mod.execute(self.store, conv, pending, self.policy,
                                     confirmed=True)
         conv.pending_action = None
+        conv.specialist_state.pop("pending_desk", None)
         state["action_record"] = record
         if record.status == "executed":
             text_out = (f"Done — {pending.summary}. It's recorded on your "
@@ -326,6 +338,16 @@ class Supervisor:
         return state
 
     # -- routing + specialists ------------------------------------------------
+    def _hint(self, text: str, analysis) -> str | None:
+        """The model's tie-break hint, live mode only. Used when the
+        router commits — a three-way tie, or a clarification the
+        customer left unanswered — never instead of asking when
+        exactly two desks tie on a real signal."""
+        if analysis.scores and self.llm.backend != "offline" \
+                and len(analysis.leaders) > 1:
+            return self.llm.intent_hint(text)
+        return None
+
     def _route(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
         forced = conv.specialist_state.pop("force_intent", None)
@@ -334,22 +356,144 @@ class Supervisor:
             # verification owns the next turn, whatever the resumed
             # text happens to score as.
             conv.intent = Intent(forced)
+            conv.specialist_state["desk"] = conv.intent.value
+            state["routing"] = {"intent": conv.intent.value,
+                                "decision": "resume_after_identity"}
+            state["next"] = "specialist"
             return state
-        scores = score_intents(text)
-        hint = None
-        if scores and self.llm.backend != "offline":
-            top = max(scores.values())
-            if sum(1 for s in scores.values() if s == top) > 1:
-                hint = self.llm.intent_hint(text)
-        intent = route(text, hint)
+
+        analysis = analyze(text)
+        record: dict = {
+            "intent": conv.intent.value,
+            "decision": "route",
+            "signals": {i.value: hits
+                        for i, hits in analysis.signals.items()},
+            "scores": {i.value: s for i, s in analysis.scores.items()},
+            "runner_up": (analysis.runner_up.value
+                          if analysis.runner_up else None),
+        }
+        state["routing"] = record
+
+        # An open clarification is answered before anything else
+        # routes. A reply that picks one of the two readings
+        # resolves it — and that resolution is real progress. A
+        # reply that settles nothing falls through to a commit:
+        # the router decides below and never asks a second question.
+        clarify = conv.specialist_state.pop("clarify", None)
+        if clarify:
+            options = [Intent(o) for o in clarify["options"]]
+            resolved = resolve_clarification(text, options)
+            if resolved is not None:
+                record["decision"] = "clarification_resolved"
+                state["clarification_resolved"] = True
+                conv.intent = resolved
+                self._change_desk(state, resolved, record)
+                state["next"] = "specialist"
+                return state
+            record["decision"] = "clarification_committed"
+
         # A live procedure owns short outcome replies ("yes", "still
         # nothing") that carry no routing signal of their own.
         walk = conv.specialist_state.get("technical", {})
-        if walk.get("procedure_id") and intent != Intent.TECHNICAL:
-            if classify_step_outcome(text) != "unclear" or not scores:
-                intent = Intent.TECHNICAL
+        if walk.get("procedure_id"):
+            raw = route(text, self._hint(text, analysis))
+            if raw != Intent.TECHNICAL and (
+                    classify_step_outcome(text) != "unclear"
+                    or not analysis.scores):
+                record["decision"] = "procedure_walk"
+                conv.intent = Intent.TECHNICAL
+                self._change_desk(state, Intent.TECHNICAL, record)
+                state["next"] = "specialist"
+                return state
+
+        # Two desks tie on a real signal: ask ONE targeted question
+        # offering the two readings in plain words instead of
+        # guessing a desk. The desk does not change while the
+        # question is open — the supervisor holds the turn.
+        if clarify is None and analysis.ambiguous:
+            options = analysis.leaders
+            conv.specialist_state["clarify"] = {
+                "options": [o.value for o in options],
+                "asked_turn": conv.turns,
+            }
+            record["decision"] = "clarify"
+            first, second = (READINGS[o] for o in options)
+            state["result"] = SpecialistResult(
+                specialist="supervisor",
+                findings=[Finding(
+                    topic="clarify",
+                    text=("That could be two different things, and I want "
+                          "the right desk on it: is it "
+                          f"(1) {first}, or (2) {second}?"))],
+                progress=True)
+            state["next"] = "post"
+            return state
+
+        if analysis.low_confidence:
+            # No clear signal: the care desk takes the turn, with
+            # the reason on the routing record — never a
+            # transactional desk on a guess.
+            intent = Intent.CARE
+            if record["decision"] == "route":
+                record["decision"] = "low_confidence_care"
+        else:
+            intent = route(text, self._hint(text, analysis))
         conv.intent = intent
+        self._change_desk(state, intent, record)
+        state["next"] = "specialist"
         return state
+
+    def _change_desk(self, state: TurnState, intent: Intent,
+                     record: dict) -> None:
+        """Set the conversation's desk, recording any move. A
+        reroute is an audit event (from-desk, to-desk, trigger
+        turn), and it retires any proposal the old desk left
+        awaiting an answer: a proposal may only ever execute after
+        being re-made and re-confirmed at the desk that now owns
+        the conversation. Identity, context and the executed-action
+        history are the conversation's, not the desk's — they all
+        survive the move untouched."""
+        conv = state["conv"]
+        record["intent"] = intent.value
+        previous = conv.specialist_state.get("desk")
+        if previous is None or previous == intent.value:
+            conv.specialist_state["desk"] = intent.value
+            return
+        record["rerouted_from"] = previous
+        self._audit(conv, "reroute", {
+            "from_desk": previous, "to_desk": intent.value,
+            "trigger_turn": conv.turns,
+            "signals": record.get("signals", {}),
+            "runner_up": record.get("runner_up")})
+        if conv.pending_action is not None and \
+                conv.specialist_state.get("pending_desk") != intent.value:
+            self._retire_pending(conv, (
+                f"the conversation moved from the {previous} desk to the "
+                f"{intent.value} desk; the proposal must be re-made and "
+                "re-confirmed there"))
+        conv.specialist_state["desk"] = intent.value
+
+    def _retire_pending(self, conv: Conversation, reason: str) -> None:
+        """Retire the awaiting proposal without executing it. The
+        record stays on the books as superseded — visible in the
+        action log and the audit, never executable — and the
+        confirmation slate is wiped clean."""
+        pending = conv.pending_action
+        if pending is None:
+            return
+        for action_record in self.store.list_actions(conv.conversation_id):
+            if action_record.status == "proposed" \
+                    and action_record.kind == pending.kind \
+                    and action_record.summary == pending.summary:
+                action_record.status = "superseded"
+                action_record.block_reason = reason
+                self.store.save_action(action_record)
+                self._audit(conv, "action", {
+                    "action_id": action_record.action_id,
+                    "status": "superseded", "reason": reason})
+                break
+        conv.pending_action = None
+        conv.specialist_state.pop("pending_desk", None)
 
     def _specialist(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
@@ -376,6 +520,15 @@ class Supervisor:
     def _post(self, state: TurnState) -> TurnState:
         conv: Conversation = state["conv"]
         result: SpecialistResult = state["result"]
+
+        if state.get("clarification_resolved") and not result.progress:
+            # The customer just answered the clarifying question.
+            # That is progress by definition, whatever the desk then
+            # manages with the turn — the bookkeeping stays honest
+            # in the other direction too: an unanswered clarification
+            # gets no such credit, only the commit below.
+            result = result.model_copy(update={"progress": True})
+            state["result"] = result
 
         if result.needs_identity or result.needs_verification:
             if result.needs_identity and conv.account_number is not None:
@@ -404,9 +557,15 @@ class Supervisor:
             return state
 
         if result.proposed_action is not None and state.get("action_record") is None:
+            if conv.pending_action is not None:
+                # A fresh proposal replaces the unanswered one; the
+                # old record is retired, never silently overwritten.
+                self._retire_pending(
+                    conv, "superseded by a new proposal before it was answered")
             record = action_mod.new_action_record(conv, result.proposed_action)
             self.store.save_action(record)
             conv.pending_action = result.proposed_action
+            conv.specialist_state["pending_desk"] = conv.intent.value
             state["action_record"] = record
 
         self._bookkeep_progress(conv, result)
@@ -489,6 +648,7 @@ class Supervisor:
                      "queue": decision.queue})
         conv.status = "escalated"
         conv.pending_action = None
+        conv.specialist_state.pop("pending_desk", None)
         state["escalated"] = True
         prefix = ""
         result = state.get("result")
@@ -517,10 +677,20 @@ class Supervisor:
             action=state.get("action_record"),
             citations=(state["result"].citations if state.get("result") else []),
         )
-        self._audit(conv, "turn",
-                    {"intent": conv.intent.value,
-                     "escalated": bool(state.get("escalated")),
-                     "identity_state": conv.identity_state.value})
+        detail = {"intent": conv.intent.value,
+                  "escalated": bool(state.get("escalated")),
+                  "identity_state": conv.identity_state.value}
+        routing = state.get("routing") or {}
+        if routing:
+            # The router's evidence rides the turn audit: matched
+            # signals, the runner-up, and how the turn was decided.
+            detail["routing"] = {
+                key: routing[key]
+                for key in ("decision", "signals", "scores", "runner_up")
+                if key in routing}
+            if routing.get("rerouted_from"):
+                detail["rerouted_from"] = routing["rerouted_from"]
+        self._audit(conv, "turn", detail)
         return state
 
     # -- entry point ----------------------------------------------------------------------
