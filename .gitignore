@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.db
+data/*.db-*
+.env
+evals/results.json
+src/*.egg-info/
+*.egg-info/
+build/
+dist/
