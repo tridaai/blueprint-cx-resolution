@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("CX_TODAY", "2026-10-01")
 
+from cx_agent import payments_book  # noqa: E402
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
 from cx_agent.store import InMemoryStore  # noqa: E402
@@ -59,7 +60,13 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # Round 6: a quoted figure, the guard's ordering, and the
            # fair-use record are never a matter of degree.
            "reply_ordered", "roaming_notices_count", "notice_kinds",
-           "notice_unwarned", "dispute_evidence_includes"}
+           "notice_unwarned", "dispute_evidence_includes",
+           # Round 7: attempt outcomes and codes, arrangement
+           # schedules and derived states, credit balances and
+           # autopay notices are execution state, exact or failed.
+           "attempt_outcomes", "attempt_codes", "arrangement_state",
+           "arrangement_total", "arrangement_installments",
+           "credit_balance", "payment_notices"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -180,6 +187,26 @@ def check_final(service, scenario: dict, conv_id: str,
         values["roaming_notices_count"] = len(notices)
         values["notice_kinds"] = sorted(n.kind for n in notices)
         values["notice_unwarned"] = any(n.unwarned_crossing for n in notices)
+        attempts = store.list_payment_attempts(scenario["account"])
+        values["attempt_outcomes"] = [t.outcome for t in attempts]
+        values["attempt_codes"] = [t.reason_code for t in attempts]
+        arrangements = store.list_payment_arrangements(scenario["account"])
+        arr = arrangements[-1] if arrangements else None
+        values["arrangements_count"] = len(arrangements)
+        values["arrangement_state"] = (
+            payments_book.arrangement_state(arr) if arr else None)
+        values["arrangement_total"] = str(arr.total) if arr else None
+        values["arrangement_installments"] = (
+            [f"{i.amount}@{i.due_date}" for i in arr.installments]
+            if arr else [])
+        values["credit_balance"] = (
+            str(account.credit_balance) if account else None)
+        values["autopay_enabled"] = (
+            account.autopay_enabled if account else None)
+        pnotices = store.list_payment_notices(scenario["account"])
+        values["payment_notices"] = len(pnotices)
+        values["payment_notice_amount"] = (
+            str(pnotices[-1].amount) if pnotices else None)
     values["dispute_evidence"] = (" | ".join(
         line.evidence for line in case.lines) if case else "")
     for key, want in final.items():
@@ -219,12 +246,35 @@ def apply_poke(service, poke: dict) -> None:
     if account_number:
         account = store.get_account(account_number)
         for key, value in poke.items():
-            if key in ("account", "age_actions_days"):
+            if key in ("account", "age_actions_days", "run_autopay",
+                       "break_arrangements"):
                 continue
-            if key in ("balance_due", "roaming_gb_used"):
+            if key in ("balance_due", "roaming_gb_used", "credit_balance"):
                 value = Decimal(str(value))
             setattr(account, key, value)
         store.save_account(account)
+        if poke.get("run_autopay"):
+            # The billing-side run happens between contacts: the
+            # attempt and any failure notice land on the record
+            # before the customer's next message.
+            from cx_agent.config import Policy
+
+            payments_book.run_autopay(store, account_number, Policy())
+        if poke.get("break_arrangements"):
+            # Time passes over an arrangement: its first
+            # instalment's due date moves into the past, unpaid —
+            # the state the calendar derives is broken.
+            arrangements = store.list_payment_arrangements(account_number)
+            if arrangements:
+                arr = arrangements[-1]
+                arr.created_date = (
+                    date.fromisoformat(arr.created_date)
+                    - timedelta(days=40)).isoformat()
+                arr.installments[0].due_date = (
+                    date.fromisoformat(os.environ["CX_TODAY"])
+                    - timedelta(days=1)).isoformat()
+                arr.state = "active"
+                store.save_payment_arrangement(arr)
 
 
 def main() -> int:

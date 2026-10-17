@@ -192,7 +192,10 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
                           "attempt_id": attempt.attempt_id}
         if attempt.outcome != "approved":
             return blocked(f"payment_declined_{attempt.reason_code}")
-        account.balance_due = max(Decimal("0"),
+        # Floored at a cent-exact zero: max() against Decimal("0")
+        # would hand back the unquantised zero, and the balance
+        # would read "0" where every other figure reads "0.00".
+        account.balance_due = max(Decimal("0.00"),
                                   account.balance_due - amount)
         store.save_account(account)
         # An approved payment pours into the active arrangement,
