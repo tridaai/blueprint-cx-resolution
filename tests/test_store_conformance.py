@@ -349,3 +349,45 @@ def test_attribution_and_annotation_records(kind, tmp_path):
     assert store.list_annotations("CONV-T") == [first, second]
     assert store.list_annotations() == [first, second]
     assert store.list_annotations("CONV-OTHER") == []
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_signal_records(kind, tmp_path):
+    """Round 11 records behave identically on every store: one
+    SignalRecord per turn, listed in turn order per conversation,
+    with the effort components and the intervention entries
+    intact, and re-saving a turn's record replaces it."""
+    from cx_agent.models import SignalRecord
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+
+    second = SignalRecord(
+        record_id="SIG-CONV-T-2", conversation_id="CONV-T", turn=2,
+        desk="billing", frustration_score=4, frustration_rising=True,
+        effort_score=6, effort_turns=2, effort_identity_attempts=2,
+        effort_reroutes=1, effort_repeats=1, progress=False,
+        interventions=[{"kind": "frustration_human_offer",
+                        "outcome": "offered"}])
+    first = SignalRecord(
+        record_id="SIG-CONV-T-1", conversation_id="CONV-T", turn=1,
+        desk="billing", frustration_score=1, effort_score=1,
+        effort_turns=1, progress=True, findings_count=2)
+    store.save_signal_record(second)  # saved out of order
+    store.save_signal_record(first)
+    other = SignalRecord(
+        record_id="SIG-CONV-O-1", conversation_id="CONV-O", turn=1,
+        effort_score=1, effort_turns=1)
+    store.save_signal_record(other)
+
+    assert store.list_signal_records("CONV-T") == [first, second]
+    assert store.list_signal_records() == [other, first, second]
+    assert store.list_signal_records("CONV-NONE") == []
+
+    first.progress = False
+    store.save_signal_record(first)
+    assert len(store.list_signal_records("CONV-T")) == 2
+    assert store.list_signal_records("CONV-T")[0].progress is False

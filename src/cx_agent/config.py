@@ -112,6 +112,18 @@ class Policy:
     # hash of the conversation id — so the queue also audits the
     # successes without drowning the reviewers. 1 queues them all.
     annotation_sample_modulus: int = 5
+    # Conversation signals (round 11): failed one-time codes at
+    # which the identity-effort intervention offers a person
+    # instead of another code. Policy defines no alternative
+    # verification path — POL-ID-01 is account + postcode + code,
+    # and three failures lock — so the governed alternative to
+    # grinding through codes is a human, offered early.
+    identity_effort_attempts: int = 2
+    # Confusion and effort share one repeat measure: a customer
+    # message counts as the same ask again when its token overlap
+    # (Jaccard over content tokens) with their previous message
+    # reaches this.
+    confusion_repeat_overlap: float = 0.6
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -165,6 +177,10 @@ class Policy:
                 "CX_MINING_SIMILARITY", base.mining_similarity),
             annotation_sample_modulus=num(
                 "CX_ANNOTATION_SAMPLE_MODULUS", base.annotation_sample_modulus),
+            identity_effort_attempts=num(
+                "CX_IDENTITY_EFFORT_ATTEMPTS", base.identity_effort_attempts),
+            confusion_repeat_overlap=flt(
+                "CX_CONFUSION_REPEAT_OVERLAP", base.confusion_repeat_overlap),
         )
 
 

@@ -64,6 +64,7 @@ from .models import (
     ProcedureRun,
     RoamingNotice,
     RoamingRate,
+    SignalRecord,
 )
 
 DEFAULT_SQLITE_PATH = "data/cx.db"
@@ -191,6 +192,9 @@ class Store(Protocol):
     def save_annotation(self, a: AnnotationRecord) -> None: ...
     def list_annotations(self, conversation_id: str | None = None
                          ) -> list[AnnotationRecord]: ...
+    def save_signal_record(self, r: SignalRecord) -> None: ...
+    def list_signal_records(self, conversation_id: str | None = None
+                            ) -> list[SignalRecord]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
     def list_audit(self, conversation_id: str) -> list[AuditEvent]: ...
     def count_customers(self) -> int: ...
@@ -224,6 +228,7 @@ class InMemoryStore:
         self.escalations: dict[str, Escalation] = {}
         self.attributions: dict[str, AttributionRecord] = {}
         self.annotations: dict[str, AnnotationRecord] = {}
+        self.signal_records: dict[str, SignalRecord] = {}
         self.audit: list[AuditEvent] = []
 
     def _put(self, table: dict, key: str, model) -> None:
@@ -437,6 +442,15 @@ class InMemoryStore:
             rows = [a for a in rows if a.conversation_id == conversation_id]
         return sorted(rows, key=lambda a: a.seq)
 
+    def save_signal_record(self, r):
+        self._put(self.signal_records, r.record_id, r)
+
+    def list_signal_records(self, conversation_id=None):
+        rows = self._all(self.signal_records)
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: (r.conversation_id, r.turn))
+
     def save_audit(self, e):
         with self._lock:
             self.audit.append(copy.deepcopy(e))
@@ -477,6 +491,7 @@ _TABLES = {
     "escalations": ("escalation_id", Escalation),
     "attributions": ("conversation_id", AttributionRecord),
     "annotations": ("annotation_id", AnnotationRecord),
+    "signals": ("record_id", SignalRecord),
 }
 
 
@@ -710,6 +725,15 @@ class _SqlStore:
         if conversation_id:
             rows = [a for a in rows if a.conversation_id == conversation_id]
         return sorted(rows, key=lambda a: a.seq)
+
+    def save_signal_record(self, r):
+        self._save("signals", r.record_id, r)
+
+    def list_signal_records(self, conversation_id=None):
+        rows = self._load_all("signals")
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: (r.conversation_id, r.turn))
 
     def save_audit(self, e):
         self._execute(

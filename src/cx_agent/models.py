@@ -584,6 +584,40 @@ class AnnotationRecord(BaseModel):
     created_date: str = ""  # ISO date
 
 
+class SignalRecord(BaseModel):
+    """One turn's conversation signals, computed in code from the
+    conversation's own records (signals.py) — how the customer is
+    experiencing the conversation, as opposed to what it is
+    about. Frustration is the governed lexicon's score of the
+    customer's latest message and whether the series is rising;
+    effort is the counted cost of the conversation so far (turns,
+    failed identity attempts, reroutes, repeated asks — the
+    components ride beside the score so the number explains
+    itself); progress is whether the turn landed; confusion names
+    the topic the customer failed to follow, when they did.
+    `interventions` lists what the signal rules did on this turn
+    — an offer made, an offer answered, a second explanation form
+    served — each also an audit event."""
+
+    record_id: str  # SIG-<conversation>-<turn>
+    conversation_id: str
+    turn: int
+    desk: str = ""  # the desk that owned the turn
+    frustration_score: int = 0
+    frustration_rising: bool = False
+    effort_score: int = 0
+    effort_turns: int = 0
+    effort_identity_attempts: int = 0
+    effort_reroutes: int = 0
+    effort_repeats: int = 0
+    progress: bool = False
+    findings_count: int = 0
+    action_executed: bool = False
+    confusion: bool = False
+    confusion_topic: str = ""
+    interventions: list[dict] = Field(default_factory=list)
+
+
 class Finding(BaseModel):
     """One structured fact a specialist established with a tool. The
     supervisor's reply may only assert what findings (or retrieved
@@ -640,6 +674,13 @@ class HandoffPacket(BaseModel):
     attempts: list[str] = Field(default_factory=list)
     actions_taken: list[str] = Field(default_factory=list)
     open_items: list[str] = Field(default_factory=list)
+    # The customer's experience of the conversation, from the
+    # signal records (signals.packet_summary): effort score and
+    # its components, the frustration trend, the interventions
+    # already tried and how they were answered, the turns taken.
+    # The human sees what it cost the customer to get here, not
+    # just the facts of the case.
+    signals: dict = Field(default_factory=dict)
 
 
 class Escalation(BaseModel):
