@@ -15,7 +15,8 @@ Four signals, each a pure function of records:
   turns. A plateau is not a rise, and a peak that already passed
   is not a rise either.
 - **Effort.** A customer-effort measure from records: one point
-  per turn taken, one per failed identity attempt, one per
+  per turn taken, one per identity attempt (each code the
+  customer had to submit, right or wrong), one per
   reroute, and one per repeated ask — a customer message whose
   token overlap with their previous message reaches the policy
   threshold. Everything the customer had to do beyond speaking

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from . import care_book, payments_book, roaming_book
+from . import explanations as expl_mod
 from .routing import analyze, classify_confirmation
 from .billing_book import (
     assess_dispute,
@@ -343,15 +344,39 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             findings=[Finding(topic="no_bill",
                               text="There's no bill issued on this account yet.")],
             progress=True)
-    findings: list[Finding] = []
+    # The explanation is the topic the confusion signal pins to
+    # this desk: the bill itself, marked here rather than left to
+    # the citation, because the reply's subject is the customer's
+    # own bill, not the policy about bills.
+    sig = conv.specialist_state.setdefault("signals", {})
+    sig["explained_topic"] = "bill"
+    sig["explained_turn"] = conv.turns
+    summary_sentence = (
+        f"Your bill issued {bill.issued} for {bill.cycle_start} to "
+        f"{bill.cycle_end} totals {fmt(bill.total)} and is due {bill.due}.")
     shock = bill_shock(bill, previous_bills, ctx.policy)
-    if shock is not None:
-        findings.append(Finding(topic="bill_shock", text=_shock_text(shock)))
-    findings.append(Finding(
-        topic="bill_summary",
-        text=(f"Your bill issued {bill.issued} for {bill.cycle_start} to "
-              f"{bill.cycle_end} totals {fmt(bill.total)} and is due {bill.due}. "
-              "Here is what makes it up:")))
+    findings: list[Finding] = []
+    if (sig.get("second_form") or "") == "bill" \
+            and "bill" not in sig.get("second_forms_used", []):
+        # The second form (round 11): the same computed figures,
+        # summary-first — the total and the driver lead, the lines
+        # follow read slowly — for a customer the family-by-family
+        # read did not land with.
+        sig["second_form_served"] = "bill"
+        findings.append(Finding(
+            topic="bill_second_form",
+            text=expl_mod.bill_second_form(
+                issued_line=summary_sentence[0].lower()
+                + summary_sentence[1:],
+                driver_line=_shock_text(shock) if shock is not None
+                else None)))
+    else:
+        if shock is not None:
+            findings.append(Finding(topic="bill_shock",
+                                    text=_shock_text(shock)))
+        findings.append(Finding(
+            topic="bill_summary",
+            text=f"{summary_sentence} Here is what makes it up:"))
     must_include = [f"{c.description}: {fmt(c.amount)}" for c in bill.charges]
     for group in decompose_bill(bill):
         must_include.append(f"{group['label']} total: {fmt(group['total'])}")
@@ -1544,6 +1569,7 @@ def _recorded_need_result(account) -> SpecialistResult:
 def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     lowered = text.lower().strip()
     care_state = conv.specialist_state.setdefault("care", {})
+    sig = conv.specialist_state.setdefault("signals", {})
 
     # A need stated a turn ago, held for want of the account
     # number: if this message names the account, the note lands
@@ -1675,6 +1701,23 @@ def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             findings=[Finding(topic="closing",
                               text="You're welcome. Anything else, just ask.")],
             progress=True, resolved=True)
+    # The second explanation form (round 11): the signals say the
+    # customer did not follow the last explanation of this topic,
+    # and the supervisor armed the topic for this turn. Serve the
+    # topic's other shape — the summary-first restatement or the
+    # worked example — never the first form's words again. The
+    # citation is unchanged: the second form says the same policy,
+    # differently.
+    flag = sig.get("second_form") or ""
+    if flag and flag != "bill" and expl_mod.has_second_form(flag) \
+            and flag not in sig.get("second_forms_used", []):
+        sig["second_form_served"] = flag
+        return SpecialistResult(
+            specialist="care",
+            findings=[Finding(topic="policy_second_form",
+                              text=expl_mod.second_form(flag))],
+            citations=[flag], progress=True, resolved=True)
+
     docs = ctx.retriever.search(text, limit=2)
     if docs:
         findings = [Finding(topic="policy", text=d["text"]) for d in docs]

@@ -29,8 +29,10 @@ from . import actions as action_mod
 from . import billing_book
 from . import payments_book
 from . import escalation as esc_mod
+from . import explanations as expl_mod
 from . import identity as id_mod
 from . import procedures
+from . import signals as signals_mod
 from .config import Policy
 from .llm import DraftContext
 from .models import (
@@ -92,6 +94,8 @@ class TurnState(TypedDict, total=False):
     first_human_ask: bool
     routing: dict  # the router's evidence for this turn (see routing.analyze)
     clarification_resolved: bool
+    signal_events: list  # this turn's intervention firings/answers
+    confusion: tuple  # (confused, topic, via) for this turn's message
     turn_result: TurnResult
     next: str  # dispatch scratch: escalate | identity | confirm | route | post | compose
 
@@ -140,6 +144,18 @@ class Supervisor:
             event_id=f"EVT-{uuid.uuid4().hex[:10]}",
             conversation_id=conv.conversation_id, kind=kind,
             detail=detail, turn=conv.turns))
+
+    def _signal_event(self, state: TurnState, kind: str, outcome: str,
+                      event: str = "intervention") -> None:
+        """An intervention firing — or the customer's answer to it
+        — is an audit event the moment it happens (the handoff
+        packet folds this trail), and rides the turn's signal
+        record as well."""
+        self._audit(state["conv"], "signal", {
+            "event": event, "kind": kind, "outcome": outcome,
+            "turn": state["conv"].turns})
+        state.setdefault("signal_events", []).append(
+            {"kind": kind, "outcome": outcome})
 
     def _screen(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
@@ -195,6 +211,57 @@ class Supervisor:
         state["decision"] = decision
         state["first_human_ask"] = bool(
             scr.asks_for_human and conv.human_requests == 1 and not decision.escalate)
+
+        # Conversation signals (round 11). An offer of a person
+        # made on an earlier turn is answered by this message
+        # before anything else reads it: yes transfers — the one
+        # escalation the rules above did not already order — no
+        # closes the offer for the rest of the conversation, and
+        # anything else lets it lapse, because the conversation
+        # has plainly moved on. The safety rules are untouched:
+        # when one of them escalates this turn anyway, the offer
+        # simply lapses into the transfer.
+        state["signal_events"] = []
+        sig = conv.specialist_state.setdefault("signals", {})
+        sig["second_form"] = ""
+        pending_offer = sig.get("pending_offer")
+        if pending_offer:
+            kind = pending_offer["kind"]
+            offers = sig.setdefault("offers", {})
+            sig["pending_offer"] = None
+            if decision.escalate:
+                offers[kind] = {"turn": pending_offer["turn"],
+                                "outcome": "lapsed"}
+                self._signal_event(state, kind, "lapsed")
+            else:
+                verdict = classify_confirmation(text)
+                if verdict == "confirm":
+                    offers[kind] = {"turn": pending_offer["turn"],
+                                    "outcome": "accepted"}
+                    self._signal_event(state, kind, "accepted")
+                    decision = esc_mod.EscalationDecision(
+                        True, "early_human_offer_accepted", "general")
+                    state["decision"] = decision
+                elif verdict == "decline":
+                    offers[kind] = {"turn": pending_offer["turn"],
+                                    "outcome": "declined"}
+                    self._signal_event(state, kind, "declined")
+                else:
+                    offers[kind] = {"turn": pending_offer["turn"],
+                                    "outcome": "lapsed"}
+                    self._signal_event(state, kind, "lapsed")
+        # Confusion — said outright, or the same question again —
+        # arms the second-form flag for the topic of the last
+        # explanation, for this turn only. The desk that owns the
+        # topic serves the other shape; a topic whose second form
+        # was already served is never re-armed.
+        confusion = signals_mod.detect_confusion(text, conv, self.policy)
+        state["confusion"] = confusion
+        if confusion[0] and confusion[1]:
+            topic = confusion[1]
+            if topic not in sig.get("second_forms_used", []) and (
+                    topic == "bill" or expl_mod.has_second_form(topic)):
+                sig["second_form"] = topic
         return state
 
     def _dispatch(self, state: TurnState) -> str:
@@ -329,12 +396,34 @@ class Supervisor:
             state["next"] = "escalate"
             return state
         left = self.policy.otp_max_attempts - conv.identity_attempts
+        text_out = (f"That code doesn't match. {left} attempt(s) left — "
+                    "check the newest message and try again.")
+        # Identity effort (round 11): the failed codes are costing
+        # the customer real effort. Policy defines no alternative
+        # verification path — POL-ID-01 is account + postcode +
+        # code, and the third failure locks — so at the governed
+        # threshold the intervention is an early offer of a
+        # person, made once and answered by the next message,
+        # never nagged.
+        sig = conv.specialist_state.setdefault("signals", {})
+        offers = sig.setdefault("offers", {})
+        if conv.identity_attempts >= self.policy.identity_effort_attempts \
+                and "identity_effort_human_offer" not in offers \
+                and not sig.get("pending_offer"):
+            offers["identity_effort_human_offer"] = {
+                "turn": conv.turns, "outcome": "offered"}
+            sig["pending_offer"] = {
+                "kind": "identity_effort_human_offer", "turn": conv.turns}
+            self._signal_event(state, "identity_effort_human_offer",
+                               "offered")
+            text_out += (
+                " If you'd rather not keep trying codes, I can bring in "
+                "a person now — they'll finish verifying you on their "
+                "side and pick this up with everything we've covered. "
+                "Say yes and I'll transfer you, or try the code again.")
         state["result"] = SpecialistResult(
             specialist="supervisor",
-            findings=[Finding(
-                topic="identity",
-                text=f"That code doesn't match. {left} attempt(s) left — "
-                     "check the newest message and try again.")],
+            findings=[Finding(topic="identity", text=text_out)],
             progress=True)
         state["next"] = "post"
         return state
@@ -706,6 +795,24 @@ class Supervisor:
         conv: Conversation = state["conv"]
         result: SpecialistResult = state["result"]
 
+        # Signal bookkeeping (round 11): a second form the desk
+        # served this turn becomes an intervention on the record,
+        # and the topic this turn explained — the first policy it
+        # cited, unless the desk marked its own, as the billing
+        # desk marks the bill — is what a later confusion is
+        # pinned to.
+        sig = conv.specialist_state.setdefault("signals", {})
+        served = sig.pop("second_form_served", "")
+        if served:
+            used = sig.setdefault("second_forms_used", [])
+            if served not in used:
+                used.append(served)
+            self._signal_event(state, f"second_form:{served}", "applied",
+                               event="second_form")
+        if result.citations and sig.get("explained_turn") != conv.turns:
+            sig["explained_topic"] = result.citations[0]
+            sig["explained_turn"] = conv.turns
+
         if state.get("clarification_resolved") and not result.progress:
             # The customer just answered the clarifying question.
             # That is progress by definition, whatever the desk then
@@ -763,8 +870,41 @@ class Supervisor:
                 "billing" if conv.intent == Intent.BILLING else "general")
             state["next"] = "escalate"
             return state
+        self._maybe_frustration_offer(state, result)
         state["next"] = "compose"
         return state
+
+    def _maybe_frustration_offer(self, state: TurnState,
+                                 result: SpecialistResult) -> None:
+        """Frustration rising across at least two turns and no
+        progress on this one: the supervisor OFFERS a person now.
+        An offer, not a transfer — the customer answers it with
+        their next message, declining closes it for the rest of
+        the conversation, and it is made at most once. It never
+        fires on a turn that landed, or on one carrying a decision
+        of its own (a proposed action the customer must answer
+        first), or alongside a pending offer."""
+        conv = state["conv"]
+        if result.progress or result.resolved \
+                or result.proposed_action is not None:
+            return
+        sig = conv.specialist_state.setdefault("signals", {})
+        offers = sig.setdefault("offers", {})
+        if "frustration_human_offer" in offers or sig.get("pending_offer"):
+            return
+        if not signals_mod.is_rising(signals_mod.frustration_series(conv)):
+            return
+        offers["frustration_human_offer"] = {
+            "turn": conv.turns, "outcome": "offered"}
+        sig["pending_offer"] = {
+            "kind": "frustration_human_offer", "turn": conv.turns}
+        self._signal_event(state, "frustration_human_offer", "offered")
+        result.must_include.append(
+            "I can see this is getting frustrating, and I'd rather not "
+            "keep you going round in circles: I can bring in a person "
+            "now if you'd like. Say yes and I'll transfer you straight "
+            "away with everything we've covered — or say no and we'll "
+            "keep working through it here.")
 
     def _bookkeep_progress(self, conv: Conversation, result: SpecialistResult) -> None:
         if result.progress:
@@ -880,6 +1020,20 @@ class Supervisor:
             if routing.get("rerouted_from"):
                 detail["rerouted_from"] = routing["rerouted_from"]
         self._audit(conv, "turn", detail)
+        # The turn's signal record (round 11): frustration, effort,
+        # progress and confusion computed from the conversation as
+        # it now stands, with this turn's interventions on it.
+        result = state.get("result")
+        action_record = state.get("action_record")
+        self.store.save_signal_record(signals_mod.snapshot(
+            self.store, conv, self.policy,
+            progress=bool(result and result.progress),
+            findings_count=len(result.findings) if result else 0,
+            action_executed=bool(
+                action_record is not None
+                and getattr(action_record, "status", "") == "executed"),
+            confusion=state.get("confusion", (False, "", "")),
+            interventions=state.get("signal_events", [])))
         return state
 
     # -- entry point ----------------------------------------------------------------------

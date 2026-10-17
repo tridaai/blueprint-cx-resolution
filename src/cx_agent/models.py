@@ -591,7 +591,7 @@ class SignalRecord(BaseModel):
     about. Frustration is the governed lexicon's score of the
     customer's latest message and whether the series is rising;
     effort is the counted cost of the conversation so far (turns,
-    failed identity attempts, reroutes, repeated asks — the
+    identity attempts, reroutes, repeated asks — the
     components ride beside the score so the number explains
     itself); progress is whether the turn landed; confusion names
     the topic the customer failed to follow, when they did.
