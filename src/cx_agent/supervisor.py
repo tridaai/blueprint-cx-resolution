@@ -156,6 +156,39 @@ class Supervisor:
                 if conv.account_number else None)
         if acct is not None and customer is None:
             customer = self.store.get_customer(acct.customer_id)
+        if scr.vulnerable_statement:
+            # A plainly stated circumstance sets the persistent
+            # flag on the account record — here, in code, with the
+            # audit event — and never anything weaker: the broad
+            # keyword screen routes this conversation to a person,
+            # but it does not write a lasting record about the
+            # customer. The account is the one the conversation is
+            # linked to, or the one the customer names in this
+            # message; with neither, there is no record to set the
+            # flag on, and the escalation below still protects the
+            # conversation.
+            target = customer
+            if target is None:
+                named = _ACCOUNT_RE.search(text)
+                if named:
+                    target = self.store.get_customer_by_account(
+                        named.group(1).upper())
+            if target is not None and not target.vulnerable:
+                target.vulnerable = True
+                self.store.save_customer(target)
+                self._audit(conv, "vulnerability", {
+                    "event": "flag_set",
+                    "statement_class": scr.vulnerable_statement,
+                    "source": "explicit_customer_statement",
+                    "customer_id": target.customer_id})
+                if conv.customer_id is None:
+                    # The record for the human who picks this up:
+                    # the conversation hands over linked to the
+                    # account it concerns. (The turn escalates
+                    # below — no desk acts on this link.)
+                    conv.customer_id = target.customer_id
+                    conv.account_number = target.account_number
+                customer = target
         decision = esc_mod.evaluate(
             conv, scr, self.policy,
             account_vulnerable=bool(customer and customer.vulnerable))

@@ -8,7 +8,11 @@ The rules, in the order they are checked:
    owns fraud, always.
 3. Legal signals escalate immediately (queue: general).
 4. Vulnerability — a flagged account, or the customer disclosing
-   hardship/vulnerability — escalates to the care queue.
+   hardship/vulnerability — escalates to the care queue. A plainly
+   stated circumstance (the governed classes in screening) also
+   SETS the persistent flag on the account record, in the
+   supervisor's screen node, before this rule routes the
+   conversation; the broad keyword screen alone never sets it.
 5. A locked-out identity verification escalates (queue: general);
    a human can complete verification on their side.
 6. The customer asking for a human: the FIRST ask earns one genuine
@@ -56,7 +60,8 @@ def evaluate(conv: Conversation, screening: Screening, policy: Policy,
         return EscalationDecision(True, "fraud_report", "fraud")
     if screening.legal:
         return EscalationDecision(True, "legal_matter", "general")
-    if screening.vulnerable or account_vulnerable:
+    if screening.vulnerable or screening.vulnerable_statement \
+            or account_vulnerable:
         return EscalationDecision(True, "vulnerable_customer", "vulnerable_care")
     if conv.identity_state.value == "failed":
         return EscalationDecision(True, "identity_verification_failed", "general")
@@ -83,6 +88,17 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         open_items.append(f"Unconfirmed action: {conv.pending_action.summary}")
     if conv.unhandled_intent:
         open_items.append(f"Unhandled need logged: {conv.unhandled_intent}")
+    vulnerable = bool(customer and customer.vulnerable)
+    if vulnerable:
+        set_here = any(
+            e.kind == "vulnerability"
+            and e.detail.get("event") == "flag_set"
+            for e in store.list_audit(conv.conversation_id))
+        open_items.append(
+            "Vulnerability flag set on the account record in this "
+            "conversation, from the customer's own statement."
+            if set_here else
+            "Vulnerability flag on the account record.")
     if conv.status != "resolved" and not taken:
         open_items.append("The customer's issue is not resolved.")
     summary = (
@@ -94,6 +110,7 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         queue=queue,
         reason=reason,
         identity_state=conv.identity_state.value,
+        vulnerable=vulnerable,
         customer_name=customer.full_name if customer else "",
         account_number=conv.account_number or "",
         summary=summary,

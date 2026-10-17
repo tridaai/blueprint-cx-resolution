@@ -50,6 +50,44 @@ _VULNERABLE_PATTERNS = [
     r"\b(bereave|funeral|hospital|terminal|disabled|disability|can't afford (food|rent|medicine)|homeless)\b",
 ]
 
+# The governed explicit-statement classes — the ONLY words that
+# set the persistent vulnerability flag on the account record.
+# Each pattern is a circumstance the customer states plainly, in
+# the first person: a bereavement, a serious illness, money
+# hardship. Anything weaker — tone, age ("I'm old"), apologies
+# for slow typing, a sad turn of phrase, a circumstance mentioned
+# about someone else — matches nothing here, however the broad
+# screen above reads the conversation itself. The distinction is
+# deliberate: escalation protects this conversation on a mention;
+# the flag is a lasting record about a person, and it is set only
+# from their own plain statement.
+_VULNERABLE_STATEMENTS: dict[str, list[str]] = {
+    "bereavement": [
+        r"\bmy (husband|wife|partner|mother|father|mum|dad|son|daughter|brother|sister) (has )?(died|passed away)\b",
+        r"\bi lost my (husband|wife|partner|mother|father|mum|dad|son|daughter|brother|sister)\b",
+        r"\bi('ve| have) (just )?been bereaved\b",
+        r"\bi('m| am) (recently )?bereaved\b",
+        r"\bthere('s| has) been a death in (the|my) family\b",
+    ],
+    "serious_illness": [
+        r"\bi('ve| have) been diagnosed with\b",
+        r"\bi have (cancer|a terminal illness|a serious illness)\b",
+        r"\bi('ve| have) got cancer\b",
+        r"\bi('m| am) terminally ill\b",
+        r"\bi('m| am) seriously ill\b",
+        r"\bi('m| am) in (hospital|hospice)\b",
+        r"\bi have a (serious|terminal) (illness|condition)\b",
+    ],
+    "financial_hardship": [
+        r"\bi can'?t afford (food|rent|medicine|medication|to eat|my bills|the bills|this bill|the bill)\b",
+        r"\bi can'?t afford to (eat|heat my home|heat the house)\b",
+        r"\bi('m| am) homeless\b",
+        r"\bwe('ve| have) lost our home\b",
+        r"\bi('m| am) in (serious )?debt\b",
+        r"\bi('m| am) facing financial hardship\b",
+    ],
+}
+
 _HUMAN_PATTERNS = [
     r"\b(human|person|agent|representative|rep|someone real|real person|manager|supervisor|operator)\b",
 ]
@@ -70,6 +108,10 @@ class Screening:
     legal: bool = False
     fraud: bool = False
     vulnerable: bool = False
+    # The governed explicit-statement class this message carries
+    # (bereavement | serious_illness | financial_hardship), or "".
+    # This — and only this — sets the persistent account flag.
+    vulnerable_statement: str = ""
     asks_for_human: bool = False
     matched: list[str] = field(default_factory=list)
 
@@ -91,6 +133,11 @@ def screen(text: str) -> Screening:
     out.legal = _hits(_LEGAL_PATTERNS, lowered, "legal", out.matched)
     out.fraud = _hits(_FRAUD_PATTERNS, lowered, "fraud", out.matched)
     out.vulnerable = _hits(_VULNERABLE_PATTERNS, lowered, "vulnerable", out.matched)
+    for statement_class, patterns in _VULNERABLE_STATEMENTS.items():
+        if any(re.search(p, lowered) for p in patterns):
+            out.vulnerable_statement = statement_class
+            out.matched.append(f"vulnerable_statement:{statement_class}")
+            break
     asks = _hits(_HUMAN_PATTERNS, lowered, "human", out.matched)
     framed = any(re.search(p, lowered) for p in _HUMAN_FRAMING)
     out.asks_for_human = bool(asks and framed)
