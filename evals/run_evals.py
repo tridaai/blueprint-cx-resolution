@@ -36,7 +36,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("CX_TODAY", "2026-10-01")
 
-from cx_agent import payments_book  # noqa: E402
+from cx_agent import care_book, mining, payments_book  # noqa: E402
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
 from cx_agent.store import InMemoryStore  # noqa: E402
@@ -66,7 +66,18 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # autopay notices are execution state, exact or failed.
            "attempt_outcomes", "attempt_codes", "arrangement_state",
            "arrangement_total", "arrangement_installments",
-           "credit_balance", "payment_notices"}
+           "credit_balance", "payment_notices",
+           # Round 8: a complaint's fields and deadline, a feedback
+           # record's kind and words, the account's accessibility
+           # preference, the vulnerability flag and its place in
+           # the handoff, and the mined cluster's count are record
+           # state — exact or failed.
+           "complaints_count", "complaint_category", "complaint_status",
+           "complaint_due", "complaint_breached_count",
+           "feedback_count", "feedback_kind", "feedback_text",
+           "customer_vulnerable", "packet_vulnerable",
+           "escalation_reasons", "accessibility_preferred",
+           "mining_candidates", "mining_top_count"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -209,6 +220,37 @@ def check_final(service, scenario: dict, conv_id: str,
             str(pnotices[-1].amount) if pnotices else None)
     values["dispute_evidence"] = (" | ".join(
         line.evidence for line in case.lines) if case else "")
+    # Round 8: the care desk's records and the mining pass.
+    complaints = store.list_complaints(conversation_id=conv_id)
+    complaint = complaints[-1] if complaints else None
+    values["complaints_count"] = len(complaints)
+    values["complaint_category"] = complaint.category if complaint else None
+    values["complaint_status"] = complaint.status if complaint else None
+    values["complaint_due"] = complaint.response_due if complaint else None
+    watch = care_book.complaint_watch(store, service.policy)
+    values["complaint_breached_count"] = len(watch["breached"])
+    values["complaint_due_soon_count"] = len(watch["due_soon"])
+    feedback_rows = store.list_feedback(conversation_id=conv_id)
+    values["feedback_count"] = len(feedback_rows)
+    values["feedback_kind"] = feedback_rows[-1].kind if feedback_rows else None
+    values["feedback_text"] = feedback_rows[-1].text if feedback_rows else None
+    values["escalations_count"] = len(escalations)
+    values["escalation_reasons"] = [e.reason for e in escalations]
+    values["packet_vulnerable"] = (
+        escalations[-1].packet.vulnerable if escalations else None)
+    if scenario.get("account"):
+        customer = store.get_customer_by_account(scenario["account"])
+        values["customer_vulnerable"] = (
+            customer.vulnerable if customer else None)
+        values["accessibility_preferred"] = (
+            account.preferred_contact if account else None)
+        values["accessibility_note"] = (
+            account.accessibility_note if account else None)
+    report = mining.mine_unhandled_intents(store, service.policy)
+    values["mining_candidates"] = len(report["candidates"])
+    values["mining_top_count"] = max(
+        (c["count"] for c in report["candidates"]), default=0)
+    values["mining_labels"] = [c["label"] for c in report["candidates"]]
     for key, want in final.items():
         total += 1
         is_zt = scenario_zt or key in ZT_KEYS
@@ -217,6 +259,9 @@ def check_final(service, scenario: dict, conv_id: str,
         if key == "dispute_evidence_includes":
             ok = want in values["dispute_evidence"]
             got = values["dispute_evidence"]
+        elif key == "mining_label_includes":
+            ok = any(want in label for label in values["mining_labels"])
+            got = values["mining_labels"]
         else:
             ok = values.get(key) == want
             got = values.get(key)
@@ -242,12 +287,31 @@ def apply_poke(service, poke: dict) -> None:
             made = date.fromisoformat(record.created_date)
             record.created_date = (made - timedelta(days=days)).isoformat()
             store.save_action(record)
+    complaint_days = int(poke.get("age_complaints_days", 0))
+    if complaint_days:
+        # Time passes over the complaint book: records and their
+        # deadlines age together, so a deadline that was ahead of
+        # the pinned today falls behind it.
+        for record in store.list_complaints():
+            record.created_date = (
+                date.fromisoformat(record.created_date)
+                - timedelta(days=complaint_days)).isoformat()
+            record.response_due = (
+                date.fromisoformat(record.response_due)
+                - timedelta(days=complaint_days)).isoformat()
+            store.save_complaint(record)
+    if poke.get("run_complaint_watch"):
+        # The operator runs the SLA watch between contacts: a
+        # breached complaint lands in the queue before the
+        # customer's next message.
+        service.run_complaint_watch()
     account_number = poke.get("account")
     if account_number:
         account = store.get_account(account_number)
         for key, value in poke.items():
             if key in ("account", "age_actions_days", "run_autopay",
-                       "break_arrangements"):
+                       "break_arrangements", "age_complaints_days",
+                       "run_complaint_watch"):
                 continue
             if key in ("balance_due", "roaming_gb_used", "credit_balance"):
                 value = Decimal(str(value))
@@ -293,6 +357,15 @@ def main() -> int:
         # persona's bill.
         service = ConversationService(store=InMemoryStore())
         service.seed()
+        # Conversations that happened before this one — a need
+        # recorded on the account in an earlier contact, a set of
+        # unhandled asks the mining pass will read. Their turns
+        # carry no expectations; they set the world.
+        for seed_conv in scenario.get("seed_conversations", []):
+            seeded = service.start_conversation()
+            for seed_turn in seed_conv["turns"]:
+                service.post_message(seeded.conversation_id,
+                                     _substitute(seed_turn["say"]))
         conv = service.start_conversation()
         s_passed = s_total = s_zt_passed = s_zt_total = 0
         for idx, turn in enumerate(scenario["turns"], start=1):

@@ -1536,9 +1536,35 @@ def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     # A complaint becomes a record the moment it's recognised —
     # category in code, the customer's words verbatim, the
     # response deadline policy promises — and the reply is the
-    # acknowledgment: reference, category, date.
+    # acknowledgment: reference, category, date. A customer
+    # chasing the complaint they already made is answered from
+    # its record, not recorded a second time.
     category = care_book.complaint_category(text)
     if category is not None:
+        open_here = [c for c in ctx.store.list_complaints(
+            conversation_id=conv.conversation_id) if c.status == "open"]
+        chasing = any(w in lowered for w in (
+            "news", "update", "any word", "progress", "happening",
+            "chasing", "on my complaint", "about my complaint",
+            "still waiting"))
+        if open_here and chasing:
+            record = open_here[-1]
+            if care_book.complaint_sla_state(record, ctx.policy) \
+                    == "breached":
+                said = (f"Your complaint {record.complaint_id} was due "
+                        f"a substantive response by {record.response_due} "
+                        f"— that date has passed, so it's been raised "
+                        f"with the team as a priority. I'm sorry you're "
+                        f"still waiting.")
+            else:
+                said = (f"Your complaint {record.complaint_id} is with "
+                        f"the team — it's due a substantive response by "
+                        f"{record.response_due}, and that still stands.")
+            return SpecialistResult(
+                specialist="care",
+                findings=[Finding(topic="complaint_chase", text=said)],
+                must_include=[record.complaint_id],
+                progress=True, resolved=True)
         record = care_book.open_complaint(
             ctx.store, conv, text, category, ctx.policy)
         due_line = (f"We'll respond in substance by "

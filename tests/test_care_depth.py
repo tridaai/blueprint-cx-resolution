@@ -91,6 +91,23 @@ def test_complaint_becomes_a_record_with_its_deadline(service):
     assert "appointment" in result.reply
 
 
+def test_chasing_a_complaint_answers_from_its_record(service):
+    conv = service.start_conversation()
+    _say(service, conv.conversation_id, COMPLAINT)
+    result = _say(service, conv.conversation_id,
+                  "Any news on my complaint?")
+    rows = service.store.list_complaints()
+    assert len(rows) == 1  # answered from the record, not re-recorded
+    assert rows[0].complaint_id in result.reply
+    assert "2026-10-06" in result.reply
+    # A second, different complaint is a second record.
+    _say(service, conv.conversation_id,
+         "And another complaint — there is no signal at my house at all.")
+    rows = service.store.list_complaints()
+    assert len(rows) == 2
+    assert rows[1].category == "coverage"
+
+
 def test_complaint_without_an_account_is_still_recorded(service):
     conv = service.start_conversation()
     _say(service, conv.conversation_id,
