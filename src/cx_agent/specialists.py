@@ -32,7 +32,7 @@ from .billing_book import (
 )
 from .clock import today
 from .config import Policy
-from .money import fmt
+from .money import fmt, money
 from .models import (
     ActionKind,
     Conversation,
@@ -376,24 +376,180 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 # ---------------------------------------------------------------------------
 
 
+_DAYS_RE = re.compile(r"(\d+)\s*-?\s*(?:days?|nights?)")
+_WEEKS_RE = re.compile(r"(\d+)\s*weeks?")
+_WEEK_PHRASES = (("a week", 7), ("one week", 7), ("two weeks", 14),
+                 ("a fortnight", 14))
+_COST_WORDS = ("cost", "cheaper", "cheapest", "worth", "price", "how much",
+               "charge", "expensive")
+
+
+def _parse_days(text: str) -> int | None:
+    lowered = text.lower()
+    match = _DAYS_RE.search(lowered)
+    if match:
+        return int(match.group(1))
+    match = _WEEKS_RE.search(lowered)
+    if match:
+        return int(match.group(1)) * 7
+    for phrase, days in _WEEK_PHRASES:
+        if phrase in lowered:
+            return days
+    return None
+
+
+def _quote_text(quote) -> str:
+    """The trip quote as one finding: the projection first, the
+    comparison second, the recommendation last — every figure
+    from roaming_book's quote, none composed by a model."""
+    text = (f"For {quote.days} days in {quote.destination} at your typical "
+            f"{roaming_book.gb(quote.daily_gb)} a day, expect about "
+            f"{roaming_book.gb(quote.expected_gb)}. Pay-as-you-go at "
+            f"{fmt(quote.per_gb)}/GB comes to {fmt(quote.payg_cost)}.")
+    if not quote.has_pass:
+        return (f"{text} The Roam Pass isn't available on your current "
+                "plan, so pay-as-you-go is the way to pay for this trip.")
+    if quote.pass_overage_gb > 0:
+        text += (f" The {quote.pass_name} is {fmt(quote.pass_price)} and "
+                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} over "
+                 f"the trip (1 GB a day); the remaining "
+                 f"{roaming_book.gb(quote.pass_overage_gb)} at "
+                 f"{fmt(quote.per_gb)}/GB adds {fmt(quote.pass_overage_cost)}, "
+                 f"so {fmt(quote.pass_cost)} all-in.")
+    else:
+        text += (f" The {quote.pass_name} is {fmt(quote.pass_price)} and "
+                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} over "
+                 f"the trip (1 GB a day) — your whole expected usage fits "
+                 f"inside it, so {fmt(quote.pass_cost)} all-in.")
+    if quote.cheaper == "pass":
+        text += f" The pass is cheaper by {fmt(quote.saving)}."
+    elif quote.cheaper == "payg":
+        text += (f" Pay-as-you-go is cheaper by {fmt(quote.saving)} — "
+                 "I wouldn't add the pass for this trip.")
+    else:
+        text += " The two come out the same — either way works."
+    return text
+
+
+def _pass_proposal(offer, basis: str) -> ProposedAction:
+    return ProposedAction(
+        kind=ActionKind.ACTIVATE_OFFER,
+        summary=f"activate the {offer.name} for {fmt(offer.one_off_price)}",
+        payload={"offer_id": offer.offer_id},
+        amount=offer.one_off_price, basis=basis)
+
+
 def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     lowered = text.lower()
-    wants_pass = any(w in lowered for w in ("buy", "add", "activate", "get", "purchase")) \
+    strong_buy = any(w in lowered for w in ("buy", "add", "activate", "purchase")) \
         and "pass" in lowered
+    soft_buy = "get" in lowered and "pass" in lowered
     account = _account(ctx, conv)
 
-    if wants_pass:
+    # Fair-use bookkeeping rides every turn that can see the
+    # account: if usage has crossed a mark since the last warning
+    # on record, the notice is raised now and its summary leads
+    # whatever this turn goes on to say.
+    notices = []
+    if account is not None:
+        notices = roaming_book.sync_fair_use_notices(
+            ctx.store, account, ctx.policy, conv.conversation_id)
+    summaries = [n.summary for n in notices]
+
+    def result(**kwargs) -> SpecialistResult:
+        kwargs["must_include"] = summaries + list(kwargs.get("must_include", []))
+        return SpecialistResult(specialist="roaming", **kwargs)
+
+    rate_row = roaming_book.find_destination(ctx.store, text)
+    days = _parse_days(text)
+
+    # Planning: a destination is named and the customer is asking
+    # what it costs — with a length, or in cost words. A bare
+    # "get" doesn't make it a purchase when a trip is being
+    # priced; a real buy verb does, and is handled below.
+    planning = rate_row is not None and not strong_buy and (
+        days is not None or any(w in lowered for w in _COST_WORDS))
+    if planning:
+        if account is None:
+            return _needs_identity("roaming", _IDENTITY_ASK)
+        quote = roaming_book.quote_trip(
+            ctx.store, account, rate_row.destination, days or 7, ctx.policy)
+        if quote is None:
+            return result(
+                findings=[Finding(
+                    topic="no_rate",
+                    text=(f"I don't have a published roaming rate for "
+                          f"{rate_row.destination}, so I won't guess at a "
+                          "figure — a person can price that trip for you."))],
+                progress=True)
+        findings = [Finding(topic="trip_quote", text=_quote_text(quote))]
+        citations = _cite(ctx, "roaming", "roam pass price projection warning")
+        state = conv.specialist_state.setdefault("roaming", {})
+        if quote.shock and not state.get("projection_shown"):
+            # The bill-shock guard: the projection and comparison
+            # lead, and nothing chargeable is proposed until the
+            # customer has seen them. The withholding is the rule,
+            # not a style — the proposal is simply not made.
+            state["projection_shown"] = True
+            findings.append(Finding(
+                topic="bill_shock_guard",
+                text=("That pay-as-you-go projection is past the point "
+                      "where I have to flag bill shock before anything "
+                      "chargeable, so I won't propose adding anything "
+                      "this turn — look at the two figures, and if you "
+                      "want the cheaper option, say the word and I'll "
+                      "set it up.")))
+            return result(findings=findings, citations=citations,
+                          must_include=[_quote_text(quote)], progress=True)
+        if quote.cheaper == "pass":
+            offer = ctx.store.get_offer("OFF-ROAM10")
+            return result(
+                findings=findings,
+                proposed_action=_pass_proposal(
+                    offer, "Recommended by the trip quote: cheaper than "
+                    "pay-as-you-go at the destination rate (POL-ROAM-03)."),
+                citations=citations, progress=True)
+        return result(findings=findings, citations=citations, progress=True)
+
+    if strong_buy or soft_buy:
         if account is None:
             return _needs_identity("roaming", _IDENTITY_ASK)
         offer = ctx.store.get_offer("OFF-ROAM10")
         findings: list[Finding] = []
         must_include: list[str] = []
-        used = account.roaming_gb_used
-        if used >= ctx.policy.roaming_fair_use_gb:
-            must_include.append(
-                f"Fair-use warning: you have used {used} GB roaming this trip, past "
-                f"the {ctx.policy.roaming_fair_use_gb} GB fair-use ceiling, so speeds "
-                "are already reduced and further data is charged per GB.")
+        progress = roaming_book.fair_use_progress(account, ctx.policy)
+        if account.roaming_country and progress["used"] > progress["cap"]:
+            rate = roaming_book.rate_for(ctx.store, account.roaming_country)
+            over_gb = progress["used"] - progress["cap"]
+            over_cost = (money(over_gb * rate.per_gb)
+                         if rate is not None else None)
+            warning = (
+                f"Fair-use warning: you have used {roaming_book.gb(progress['used'])} "
+                f"roaming this trip, past the {roaming_book.gb(progress['cap'])} "
+                "fair-use ceiling, so speeds are already reduced and "
+                "further data is charged per GB.")
+            if over_cost is not None and over_cost > ctx.policy.roaming_bill_shock_amount:
+                state = conv.specialist_state.setdefault("roaming", {})
+                if not state.get("projection_shown"):
+                    # The same guard, fired from actual usage: the
+                    # overage already run up leads, and the sale
+                    # waits a turn.
+                    state["projection_shown"] = True
+                    guard = (
+                        f"{warning} The {roaming_book.gb(over_gb)} past the "
+                        f"ceiling at {account.roaming_country} rates "
+                        f"({fmt(rate.per_gb)}/GB) already comes to "
+                        f"{fmt(over_cost)} in pay-as-you-go charges. Look "
+                        "at that figure before we add anything else "
+                        "chargeable — a Roam Pass from here covers the "
+                        "next 10 days, but it can't undo the overage "
+                        "already run up. Say the word and I'll add it.")
+                    return result(
+                        findings=[Finding(topic="bill_shock_guard", text=guard)],
+                        citations=_cite(ctx, "roaming",
+                                        "roaming fair use projection warning"),
+                        must_include=[warning], progress=True)
+            must_include.append(warning)
             findings.append(Finding(
                 topic="fair_use",
                 text="Before anything chargeable, you should have that warning in full."))
@@ -401,21 +557,17 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             findings.append(Finding(
                 topic="not_eligible",
                 text=f"The Roam Pass isn't available on your current plan."))
-            return SpecialistResult(specialist="roaming", findings=findings,
-                                    citations=_cite(ctx, "roaming", "roam pass countries price"),
-                                    must_include=must_include, progress=True)
+            return result(findings=findings,
+                          citations=_cite(ctx, "roaming", "roam pass countries price"),
+                          must_include=must_include, progress=True)
         findings.append(Finding(
             topic="roam_pass",
             text=(f"{offer.name}: {fmt(offer.one_off_price)} one-off, and it "
                   f"covers {offer.duration_days} days. {offer.blurb}")))
-        return SpecialistResult(
-            specialist="roaming", findings=findings,
-            proposed_action=ProposedAction(
-                kind=ActionKind.ACTIVATE_OFFER,
-                summary=f"activate the {offer.name} for {fmt(offer.one_off_price)}",
-                payload={"offer_id": offer.offer_id},
-                amount=offer.one_off_price,
-                basis="Customer requested the pass in conversation (POL-ROAM-01)."),
+        return result(
+            findings=findings,
+            proposed_action=_pass_proposal(
+                offer, "Customer requested the pass in conversation (POL-ROAM-01)."),
             citations=_cite(ctx, "roaming", "roam pass price days activate"),
             must_include=must_include, progress=True)
 
@@ -427,11 +579,13 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
         return _needs_identity("roaming", _IDENTITY_ASK)
     findings = []
     if account is not None and account.roaming_country:
+        progress = roaming_book.fair_use_progress(account, ctx.policy)
         findings.append(Finding(
             topic="roaming_status",
             text=(f"You're currently roaming in {account.roaming_country} and have "
-                  f"used {account.roaming_gb_used} GB this trip. The fair-use "
-                  f"ceiling is {ctx.policy.roaming_fair_use_gb} GB.")))
+                  f"used {roaming_book.gb(progress['used'])} this trip. The fair-use "
+                  f"ceiling is {roaming_book.gb(progress['cap'])} — that's "
+                  f"{roaming_book.num(progress['pct'])}% of it.")))
     docs = ctx.retriever.search(text, limit=2, section="roaming")
     for doc in docs:
         findings.append(Finding(topic="policy", text=doc["text"]))
@@ -441,8 +595,8 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             text=("Roaming outside a pass is charged per GB at the destination "
                   "rate. Tell me where you're heading and I'll work out the "
                   "cheapest way to stay connected.")))
-    return SpecialistResult(
-        specialist="roaming", findings=findings,
+    return result(
+        findings=findings,
         citations=[d["doc_id"] for d in docs], progress=True, resolved=bool(docs))
 
 

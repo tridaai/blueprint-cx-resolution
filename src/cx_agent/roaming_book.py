@@ -58,7 +58,7 @@ ALIASES = {
 }
 
 
-def _num(value: Decimal) -> str:
+def num(value: Decimal) -> str:
     """A Decimal as a customer reads it: 7.2, 26, 104 — trailing
     zeros trimmed, never scientific notation."""
     text = format(value, "f")
@@ -68,7 +68,7 @@ def _num(value: Decimal) -> str:
 
 
 def gb(value: Decimal) -> str:
-    return f"{_num(value)} GB"
+    return f"{num(value)} GB"
 
 
 def rate_for(store, destination: str):
@@ -106,8 +106,9 @@ class TripQuote:
     destination: str
     days: int
     per_gb: Decimal
-    expected_gb: Decimal  # days × the customer's typical daily use
-    payg_cost: Decimal
+    daily_gb: Decimal = ZERO  # the usage profile the quote was priced from
+    expected_gb: Decimal = ZERO  # days × the customer's typical daily use
+    payg_cost: Decimal = ZERO
     pass_name: str = ""
     pass_price: Decimal = ZERO
     pass_allowance_gb: Decimal = ZERO  # included across the trip
@@ -145,7 +146,8 @@ def quote_trip(store, account: Account, destination: str, days: int,
     expected = typical * Decimal(days)
     quote = TripQuote(
         destination=rate.destination, days=days, per_gb=rate.per_gb,
-        expected_gb=expected, payg_cost=money(expected * rate.per_gb))
+        daily_gb=typical, expected_gb=expected,
+        payg_cost=money(expected * rate.per_gb))
     offer = _pass_offer(store, account)
     if offer is not None:
         per_day = offer.included_gb_per_day or ZERO
@@ -232,13 +234,13 @@ def notice_summary(kind: str, progress: dict, projection: dict | None,
     used, cap, pct = progress["used"], progress["cap"], progress["pct"]
     if kind == "fair_use_100":
         lead = (f"Fair-use warning: you have used {gb(used)} roaming this "
-                f"trip, past the {gb(cap)} fair-use ceiling ({_num(pct)}%). "
+                f"trip, past the {gb(cap)} fair-use ceiling ({num(pct)}%). "
                 "Speeds are reduced now, and further data is charged per GB.")
     else:
         lead = (f"Fair-use heads-up: you have used {gb(used)} roaming this "
-                f"trip — {_num(pct)}% of the {gb(cap)} fair-use ceiling.")
+                f"trip — {num(pct)}% of the {gb(cap)} fair-use ceiling.")
     if projection is not None and projection["overage_cost"] > 0:
-        lead += (f" At the pace you're going ({_num(projection['pace_per_day'])} "
+        lead += (f" At the pace you're going ({num(projection["pace_per_day"])} "
                  f"GB a day), you're projected to reach "
                  f"{gb(projection['projected_total_gb'])} over a "
                  f"{projection['window_days']}-day trip — about "
@@ -388,7 +390,7 @@ def roaming_dispute_verdicts(store, account: Account | None, bill: Bill,
                 charge_id=charge.charge_id, creditable=ZERO,
                 evidence=(f"a fair-use warning was given on "
                           f"{latest.created_date}, when usage reached "
-                          f"{_num(latest.pct)}% of the "
+                          f"{num(latest.pct)}% of the "
                           f"{gb(latest.cap_gb)} fair-use ceiling"),
                 decline_reason=(
                     f"we warned you on {latest.created_date} as the "

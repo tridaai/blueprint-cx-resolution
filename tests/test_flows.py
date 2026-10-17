@@ -77,4 +77,13 @@ def test_fair_use_warning_precedes_the_pass_sale(service):
     result = _say(service, conv.conversation_id, expected_code("NB-1002"))
     assert "Fair-use warning" in result.reply
     assert "31 GB" in result.reply
+    # Round 6: Daniel's overage already run up (6 GB past the
+    # ceiling at Spain rates = $51.00) passes the bill-shock
+    # threshold, so the guard fires from actual usage — the
+    # warning and the overage figure lead, and the sale itself
+    # waits for the next turn.
+    assert "$51.00" in result.reply
+    assert result.action is None
+    result = _say(service, conv.conversation_id, "yes, add the pass")
     assert result.action is not None and result.action.status == "proposed"
+    assert "Fair-use warning" in result.reply
