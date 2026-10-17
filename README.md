@@ -172,6 +172,49 @@ open http://localhost:8000              # the operator console
   conversations that ended unhandled are mined offline into
   candidate intents for a human to design (`cx-agent
   intent-mining`) — a report, never an auto-created intent.
+## How the conversation is going
+
+Outcomes are only half of what a conversation records. After
+every customer turn the agent also computes — in code, from the
+conversation's own records, never by asking a model how the chat
+feels — four **signals**: **frustration**, scored per message
+against a governed negative-affect lexicon, with the trend read
+off the series (rising means the latest message is the
+customer's most frustrated yet, and it built over at least two
+turns); **effort**, the counted cost of the conversation so far
+— a point per turn, per identity attempt, per reroute, per
+repeated ask, the components kept beside the score; **progress**,
+whether the turn landed; and **confusion**, said outright or the
+same question asked again, pinned to the topic of the last
+explanation. The series persists per conversation
+(`GET /signals/{conversation}`), and three rules act on it:
+
+- **Frustration rising, with no progress** → the supervisor
+  **offers a person now**, in the reply. An offer, not a
+  transfer: yes takes it, no closes it for the rest of the
+  conversation, anything else lets it lapse. It fires once, and
+  never on a turn carrying a decision of its own.
+- **Identity effort at the governed threshold** (two failed
+  codes) → the same early offer, mid-verification. Policy
+  defines no alternative verification path, so a human is the
+  governed alternative to grinding through codes — and a third
+  failure still locks, offer or not.
+- **Confusion on a topic** → the desk serves that topic's
+  **second explanation form** — a summary-first restatement or a
+  worked example, written for the top topics — never the first
+  form's words again, and never twice.
+
+Every firing and every answer is an audit event. When a
+conversation does escalate, the handoff packet carries the
+signal summary — effort, the frustration trend, the
+interventions tried and how they were answered — so the human
+sees the customer's experience, not just the case. Operators
+read the aggregates (`cx-agent signals`, `GET /signals/report`,
+the console's signals panel): average effort by entry desk, the
+share of conversations whose frustration rose, offer outcomes,
+and the frustration × escalation counts — descriptive, and
+labelled as such.
+
 ## Why conversations end
 
 Every closed conversation gets a record of how it ended,
@@ -208,7 +251,19 @@ intents.
   and a second ask transfers at once; three consecutive
   no-progress turns transfer. Every transfer carries a handoff
   packet built from the record — summary, attempts, actions taken,
-  open items.
+  open items — and, since round 11, the signal summary: what the
+  conversation cost the customer and what was already tried.
+- **Signals** — frustration, effort, progress and confusion are
+  computed per turn from the conversation's own records (a
+  governed lexicon, counted effort components, a repeat-overlap
+  measure), never judged by a model. They drive three
+  interventions — an early offer of a person on rising
+  frustration with no progress, the same offer at the
+  identity-effort threshold, and a second explanation form on
+  confusion — each recorded as an audit event. None of them
+  touches the escalation rules above: an accepted offer
+  escalates under its own reason, and the safety rules fire
+  exactly as before, offer or no offer.
 - **Grounding** — a policy claim in a reply must cite the policy
   document retrieval returned for that turn; the composer enforces
   the citation in code after drafting. Account facts come only
@@ -252,10 +307,10 @@ intents.
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **127 scripted multi-turn conversations** played
+behavioral: **135 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care, attribution. Eighty-one are hand-written persona trajectories
+identity, care, attribution, signals. Eighty-nine are hand-written persona trajectories
 (the refund seeker, the human-demander, the fragment writer, the
 AI skeptic, the confused elder, non-native phrasing). Thirty-five
 more are the **persona matrix**: seven difficult-customer
@@ -271,7 +326,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1078/1078 assertions, 799/799 zero-tolerance. The
+the tree: 1178/1178 assertions, 899/899 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -281,7 +336,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (217 tests) covers the deterministic core —
+The pytest suite (243 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, care records and the mining pass, failure
@@ -323,6 +378,13 @@ src/cx_agent/
                    trail in code, the windowed cause × desk
                    report with the mining join, and the human
                    review loop (annotations, agreement, verdicts)
+  signals.py       conversation signals: the frustration lexicon
+                   and its rising rule, the counted effort score,
+                   confusion detection, the per-turn snapshot, the
+                   packet summary and the operator report
+  explanations.py  second explanation forms: summary-first
+                   restatements and worked examples for the top
+                   topics, plus the bill's summary-first form
   procedures.py    the troubleshooting engine: procedures as
                    versioned data, runs, tools, branches, safety
                    steps, transcript-carrying callbacks
@@ -333,7 +395,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (71 trajectories) + personas.py
+evals/             scenarios.jsonl (79 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite

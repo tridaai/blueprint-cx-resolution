@@ -57,7 +57,10 @@ Nodes, in turn order:
   escalation rules consume (threat, fraud, legal, vulnerability,
   ask-for-a-human). Injection attempts are audit-logged; the turn
   then proceeds as ordinary service, so an injected instruction is
-  never routed, quoted into a prompt, or acted on.
+  never routed, quoted into a prompt, or acted on. Round 11: the
+  screen also answers a pending signal offer (see Conversation
+  signals) before anything else reads the message, and arms the
+  second-form flag from the turn's confusion detection.
 - **dispatch** — an ordered choice: an escalation decision already
   made → `escalate`; an identity flow in progress → `identity`; a
   proposed action awaiting its answer → `confirm`; otherwise →
@@ -67,6 +70,8 @@ Nodes, in turn order:
   postcode, 6-digit code). Success at the code step resumes the
   original request in the same turn, at the desk that asked
   (`force_intent`), so the customer never repeats themselves.
+  Failed codes that reach the identity-effort threshold append an
+  early offer of a person to the reply.
 - **confirm** — classifies the reply against the pending action
   (confirm / decline / other, closed vocabularies in
   `routing.py`). Confirming a consequential action while
@@ -94,7 +99,9 @@ Nodes, in turn order:
 - **post** — bookkeeping: identity hand-offs (awaiting state +
   resume text), specialist-driven escalation, action proposal
   recording, the no-progress counter, and the no-progress
-  escalation when the counter reaches the policy cap.
+  escalation when the counter reaches the policy cap. Round 11:
+  it records a served second form, tracks the turn's explained
+  topic, and appends the frustration offer on no-progress turns.
 - **compose** — builds a `DraftContext` (findings, verbatim lines,
   the confirmation ask, citations) and calls the LLM boundary.
   Afterwards the code enforces three guarantees on whatever came
@@ -108,7 +115,8 @@ Nodes, in turn order:
   model: it is assembled from the conversation, the action log
   and the audit trail.
 - **finalize** — appends both messages, writes the turn audit
-  event, and emits the `TurnResult`.
+  event, writes the turn's signal record, and emits the
+  `TurnResult`.
 
 Conversation state lives in the store, not in graph memory: the
 API is stateless, the graph is invoked per turn over the loaded
@@ -515,12 +523,12 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 127 scripted
+The eval pack grades trajectories, not replies: 135 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
 the escalation queue, the reroute audit count, action-record
-statuses). Eighty-one are hand-written; the rest are generated
+statuses). Eighty-nine are hand-written; the rest are generated
 and attacked (round 9, below). The report breaks the results
 down by rubric, by persona, and by adversarial class, so a
 regression localises to a customer style or an attack type. The trajectories include the round-2 desk discipline:
@@ -581,8 +589,13 @@ later plain "yes" confirmed nothing. Two decision points shared
 the flaw (the supervisor's confirmation protocol and the roaming
 guard's deferred assent); both now re-ask a signal-less
 non-answer and keep the decision open, and the persona's four
-transaction flows are the regression proof. The rubrics encode the
-production rules:
+transaction flows are the regression proof. Round 11 adds the
+signals trajectories: the frustration offer on its exact turn,
+declined and never repeated; the identity-effort offer,
+accepted and lapsed; second forms reached by stated confusion
+and by a repeated question; the packet's signal summary asserted
+field by field; and a calm negative control that fires nothing.
+The rubrics encode the production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
   stuck is a transfer; threat/fraud/legal/vulnerable are immediate.
@@ -601,6 +614,10 @@ production rules:
 - **technical** — procedures branch on tool results, measurements
   decide in code, dead ends book transcript-carrying callbacks,
   safety steps cannot be skipped.
+- **signals** — the offer fires on the rule's exact turn and is
+  answered as recorded; second forms land on confusion; the
+  packet carries the experience summary; a calm conversation
+  fires nothing.
 
 Zero-tolerance assertions (escalation decisions, action
 execution, money/plan state, identity state, and the procedure
@@ -685,16 +702,70 @@ and closes it. No automation reads any of it. It is the
 evidence base from which humans fix routing, raise a cap, or
 design the intent the mining pass keeps pointing at.
 
+## Conversation signals
+
+Round 11 adds the experience layer: what the conversation cost
+the customer, computed from its own records. `signals.py` is
+pure functions over the conversation, its audit trail and the
+policy — the governed negative-affect lexicon and its rising
+rule (the latest score is real, beats the turn before, and beats
+everything earlier; a plateau is not a rise), the effort formula
+(turns + identity attempts + reroutes + repeated asks, each
+counted once, components kept beside the score), and the
+confusion detectors (explicit not-understanding phrases, or a
+repeated question by token overlap). The supervisor is the only
+actor:
+
+- **screen** resolves a pending offer before anything else reads
+  the message — accept escalates as `early_human_offer_accepted`,
+  decline closes the offer for the conversation, anything else
+  lets it lapse; when a safety rule escalates the same turn, the
+  offer lapses into the transfer — and arms the second-form flag
+  from the turn's confusion detection.
+- **identity** appends the effort offer when failed codes reach
+  the policy threshold. There is deliberately no other branch:
+  POL-ID-01 defines one verification path, so the alternative
+  the system can honestly offer is a person, early.
+- **post** consumes a served second form into the intervention
+  record, tracks the turn's explained topic (the result's first
+  citation, unless the desk marked its own), and appends the
+  frustration offer as a must-include line on turns that made no
+  progress — composition then guarantees it reaches the reply
+  verbatim. The offer never fires beside a proposed action: a
+  turn carrying a decision is never asked to carry two.
+- **finalize** writes the turn's SignalRecord (migration 0009 in
+  both dialects; one record per turn — the latest is the
+  snapshot, the list is the series).
+
+Second forms are data (`explanations.py`): summary-first
+restatements and worked examples for the top policy topics,
+served by the care desk with the citation unchanged — the same
+policy, said differently. The billing desk's form is composed
+from the customer's own computed figures, summary-first, the
+decomposition lines riding as must-includes after the lead. A
+topic with no second form gets none: the confusion is still on
+the record, and the frustration and no-progress rules still
+protect the customer.
+
+`build_packet` folds the signal audit trail plus a live
+effort/trend computation into `packet.signals`, so the summary
+is true at the moment of escalation, not only after the turn's
+bookkeeping. The operator report (`signals.signal_report`, on
+the API, the CLI and the console) aggregates the stored
+records; its frustration × escalation table is counts only, and
+the payload carries the descriptive label so the numbers are
+never quoted as a cause.
+
 ## Round map
 
-This document describes rounds 1–10 (core; rerouting and
+This document describes rounds 1–11 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
-annotation queue). The scheduled deepening — the retention
-flow, conversation-signal extraction, the daily quality pass,
-the prompt registry, handoff scoring, cost budgets — is laid
-out in the blueprint backlog; the architecture above is shaped
-so each lands as a new node, desk behavior, or report over the
-same records, not as a rewrite.
+annotation queue; conversation signals). The scheduled
+deepening — the retention flow, the daily quality pass, the
+prompt registry, handoff scoring, cost budgets — is laid out in
+the blueprint backlog; the architecture above is shaped so each
+lands as a new node, desk behavior, or report over the same
+records, not as a rewrite.
