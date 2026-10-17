@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from . import plan_changes
 from .clock import today
 from .config import Policy
 from .identity import is_verified
@@ -122,13 +123,39 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
     elif proposal.kind == ActionKind.CHANGE_PLAN:
         if account is None:
             return blocked("no_account")
+        # Stale-proposal protection: a plan proposal is priced
+        # against a fingerprint of the account at issue time. If
+        # the account has moved since — another action executed, a
+        # payment landed, a reroute retired the figures — the
+        # execution refuses and the supervisor re-quotes; a
+        # customer never confirms numbers that no longer match
+        # their account.
+        stamped = proposal.payload.get("fingerprint")
+        if stamped and plan_changes.account_fingerprint(account) != stamped:
+            return blocked("stale_proposal")
+        if proposal.payload.get("reversal_of"):
+            return _execute_reversal(store, conv, proposal, policy,
+                                     record, blocked)
         new_plan = store.get_plan(proposal.payload.get("new_plan_id", ""))
         if new_plan is None:
             return blocked("plan_missing")
-        net = Decimal(str(proposal.payload.get("net", "0")))
-        account.plan_id = new_plan.plan_id
-        account.balance_due += net
-        store.save_account(account)
+        if proposal.payload.get("effective") == "next_cycle":
+            # A scheduled downgrade is what executes: the plan
+            # does not move today and no money moves — the
+            # schedule lands on the account, effective at the
+            # cycle boundary the customer was quoted.
+            account.pending_plan_id = new_plan.plan_id
+            account.pending_plan_effective = proposal.payload.get(
+                "effective_date", "")
+            store.save_account(account)
+        else:
+            net = Decimal(str(proposal.payload.get("net", "0")))
+            account.plan_id = new_plan.plan_id
+            account.balance_due += net
+            # An immediate change supersedes any scheduled one.
+            account.pending_plan_id = None
+            account.pending_plan_effective = ""
+            store.save_account(account)
 
     elif proposal.kind == ActionKind.UPDATE_PAYMENT_METHOD:
         last4 = str(proposal.payload.get("last4", ""))
@@ -157,4 +184,68 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
     record.status = "executed"
     store.save_action(record)
     _audit(store, conv, record)
+    return record
+
+
+def _execute_reversal(store, conv: Conversation, proposal: ProposedAction,
+                      policy: Policy, record: ActionRecord,
+                      blocked) -> ActionRecord:
+    """Execute a plan-change reversal as a compensating pair.
+
+    The original change record is never edited. Two new records
+    land, both stamped with its id: the record this execution
+    returns restores the plan (or cancels the schedule, when the
+    change was a downgrade that never took effect), and a second
+    record unwinds the money — the exact inverse of the original
+    net, applied to the balance as its own audited act. The
+    window and the not-already-reversed rule are re-checked here,
+    at execution, not trusted from proposal time."""
+    account = store.get_account(conv.account_number) if conv.account_number else None
+    if account is None:
+        return blocked("no_account")
+    orig = next((r for r in store.list_actions()
+                 if r.action_id == proposal.payload.get("reversal_of")), None)
+    if orig is None or orig.status != "executed" \
+            or orig.kind != ActionKind.CHANGE_PLAN:
+        return blocked("reversal_target_missing")
+    if orig.account_number != account.account_number:
+        return blocked("reversal_target_other_account")
+    if plan_changes.reversal_of(store, orig):
+        return blocked("change_already_reversed")
+    if not plan_changes.within_reversal_window(orig, policy):
+        return blocked("reversal_window_closed")
+
+    unwind = Decimal(str(proposal.payload.get("unwind_net", "0")))
+    # Leg one: the plan. A change that already landed is put back;
+    # a scheduled downgrade is cancelled before it ever lands.
+    if orig.payload.get("effective") == "next_cycle":
+        account.pending_plan_id = None
+        account.pending_plan_effective = ""
+    else:
+        restore = proposal.payload.get("restore_plan_id", "")
+        if restore:
+            account.plan_id = restore
+    store.save_account(account)
+    record.payload = {**proposal.payload, "leg": "restore_plan"}
+    record.status = "executed"
+    store.save_action(record)
+    _audit(store, conv, record)
+
+    # Leg two: the money, as its own record — the exact inverse
+    # of the original net (zero for a scheduled change, which
+    # never moved money; the record still lands, so the pair is
+    # always a pair).
+    money_leg = new_action_record(conv, ProposedAction(
+        kind=ActionKind.CHANGE_PLAN,
+        summary=(f"unwind the money from the reversed change "
+                 f"({orig.action_id})"),
+        payload={"leg": "money_unwind", "reversal_of": orig.action_id,
+                 "net": str(unwind)},
+        amount=unwind,
+        basis=f"Money leg of the reversal of {orig.action_id}."))
+    account.balance_due += unwind
+    store.save_account(account)
+    money_leg.status = "executed"
+    store.save_action(money_leg)
+    _audit(store, conv, money_leg)
     return record

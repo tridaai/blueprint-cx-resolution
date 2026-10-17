@@ -33,6 +33,7 @@ from . import procedures
 from .config import Policy
 from .llm import DraftContext
 from .models import (
+    ActionKind,
     AuditEvent,
     Conversation,
     Escalation,
@@ -51,6 +52,7 @@ from .routing import (
     route,
 )
 from .screening import Screening, screen
+from . import specialists as specialists_mod
 from .specialists import Ctx, account, billing, care, offers, roaming, technical
 
 log = logging.getLogger("cx_agent.supervisor")
@@ -69,6 +71,7 @@ _QUEUE_LABEL = {
     "billing": "a billing specialist",
     "fraud": "our fraud team",
     "vulnerable_care": "a member of our care team",
+    "offers": "an offers specialist",
 }
 
 _ACCOUNT_RE = re.compile(r"\b(NB-\d{4,})\b", re.IGNORECASE)
@@ -364,6 +367,34 @@ class Supervisor:
             return state
         record = action_mod.execute(self.store, conv, pending, self.policy,
                                     confirmed=True)
+        if record.status == "blocked" \
+                and record.block_reason == "stale_proposal" \
+                and pending.kind == ActionKind.CHANGE_PLAN:
+            # The proposal was priced against an account that has
+            # since moved. Its record is marked stale on the books
+            # (superseded, with the reason), and the offers desk
+            # re-quotes the same request from live state for a fresh
+            # confirmation — the customer is never asked to confirm
+            # figures that no longer match their account, and the
+            # refusal is explained rather than buried.
+            self._retire_pending(conv, (
+                "stale_proposal: the account state changed after this "
+                "proposal was priced; refused at execution and "
+                "superseded by a fresh proposal"))
+            fresh = specialists_mod.refresh_plan_change(
+                conv, self.ctx, pending)
+            conv.pending_action = None
+            conv.specialist_state.pop("pending_desk", None)
+            if fresh.proposed_action is not None:
+                fresh_record = action_mod.new_action_record(
+                    conv, fresh.proposed_action)
+                self.store.save_action(fresh_record)
+                conv.pending_action = fresh.proposed_action
+                conv.specialist_state["pending_desk"] = "offers"
+            state["action_record"] = record
+            state["result"] = fresh
+            state["next"] = "post"
+            return state
         callback_id = pending.payload.get("callback_id")
         if callback_id:
             # The callback record settles on the booking's outcome:
