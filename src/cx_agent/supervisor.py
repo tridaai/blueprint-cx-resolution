@@ -345,6 +345,33 @@ class Supervisor:
         pending = conv.pending_action
         verdict = classify_confirmation(text)
         if verdict == "other":
+            if not analyze(text).scores:
+                # No desk signal of any kind: this is not a new
+                # request, it is an answer we cannot read — a
+                # hesitant "um, yes I think so", a fragment, a
+                # mumble. Routing it as a fresh turn would land it
+                # on the care desk, and the desk change would
+                # retire the proposal the customer was mid-answer
+                # to: a credit they had effectively agreed to
+                # would vanish without anyone deciding that. The
+                # proposal stays open and the question is asked
+                # again, plainly. A reply carrying any real signal
+                # still routes (and a desk change still retires,
+                # per the rerouting rule) — only the signal-less
+                # non-answer is held here.
+                self._audit(conv, "action", {
+                    "event": "confirmation_reasked",
+                    "action_kind": pending.kind.value})
+                state["result"] = SpecialistResult(
+                    specialist="supervisor",
+                    findings=[Finding(
+                        topic="confirmation",
+                        text=("Just so I have it straight — shall I go "
+                              f"ahead with this: {pending.summary}? "
+                              "A yes or a no is all I need."))],
+                    progress=False)
+                state["next"] = "post"
+                return state
             state["next"] = "route"
             return state
         if verdict == "decline":
