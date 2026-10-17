@@ -26,6 +26,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from .documents import embed
+from .prompts import POLICY_TEXTS, seed_registry
 from .models import (
     Account,
     Bill,
@@ -347,140 +348,33 @@ def build_bills() -> list[Bill]:
 
 
 def build_policies() -> list[PolicyDocument]:
+    """The policy corpus records. The documents' TEXT lives in
+    the prompt registry (prompts.POLICY_TEXTS) — the corpus and
+    the registry are one wording, never two copies: this builder
+    wraps each registered text in its record (id, title, section),
+    and activating a new registry version of a policy rewrites
+    the corpus document to match (prompts._sync_policy_corpus)."""
     rows = [
-        ("POL-BILL-01", "Billing disputes", "billing",
-         "When a charge on a bill is wrong — a duplicate charge, a charge for a "
-         "service after it was cancelled, or a charge at the wrong rate — the "
-         "incorrect amount is credited in full once the evidence is on the bill "
-         "itself. Each disputed charge is decided on its own evidence, and the "
-         "dispute is recorded as a case with the decision for every line. "
-         "Evidenced dispute credits are capped at $50 per bill; above that the "
-         "case goes to the billing team with its record intact. The customer "
-         "confirms the credit before it is applied."),
-        ("POL-BILL-02", "Goodwill credits", "billing",
-         "When the bill is correct but the customer has had a poor experience, "
-         "the agent may offer a goodwill credit of up to $25. The credit needs "
-         "the customer's agreement and is applied to the next bill. Goodwill "
-         "credits are offered once per conversation, and no more than $50 of "
-         "goodwill may be credited to an account in any 90-day period — past "
-         "that, goodwill is refused, though an incorrect charge is still "
-         "credited in full under the dispute policy."),
-        ("POL-BILL-03", "Reading your bill", "billing",
-         "Every bill is itemised: the plan charge, device instalments, one-off "
-         "charges, roaming, and taxes and regulatory fees are separate lines. "
-         "The total is the sum of the lines. Due dates fall 21 days after the "
-         "bill is issued."),
-        ("POL-ROAM-01", "Roaming and the Roam Pass", "roaming",
-         "Outside a pass, roaming data is charged per GB at the destination "
-         "rate. The Roam Pass costs $30 for 10 days and includes unlimited "
-         "calls and texts plus 1 GB of data per day in more than 40 countries. "
-         "A pass can be activated at any point in a trip and starts when the "
-         "customer confirms it."),
-        ("POL-ROAM-02", "Roaming fair use", "roaming",
-         "Roaming fair use is 25 GB per trip. Beyond 25 GB, speeds reduce and "
-         "additional data is charged per GB. The agent must tell a customer "
-         "who is near or past the fair-use ceiling before recommending any "
-         "further chargeable roaming product."),
-        ("POL-ROAM-03", "Roaming projections and warnings", "roaming",
-         "Before a trip, the agent prices both ways of paying from the "
-         "destination rate and the customer's typical daily use — "
-         "pay-as-you-go and the Roam Pass — and states both figures and "
-         "the saving before recommending either. When the projected "
-         "pay-as-you-go cost passes $50, the projection and the "
-         "comparison lead the conversation: no chargeable roaming "
-         "product is proposed until the customer has seen them. While "
-         "a customer roams, the agent warns as fair use runs out — a "
-         "summary at 80% of the ceiling and again at 100%, stating the "
-         "usage, the ceiling, and what continuing at the same pace is "
-         "projected to cost. A roaming charge disputed afterwards is "
-         "decided on the record: a charge covered by an active pass "
-         "stands, a charge the customer was warned about stands, and a "
-         "charge that passed the ceiling with no warning on record is "
-         "credited under the dispute policy."),
-        ("POL-PLAN-01", "Changing your plan", "plans",
-         "A plan change can start immediately or at the next cycle. An "
-         "immediate change is prorated: the customer is credited for the "
-         "unused part of the old plan and charged for the remaining part of "
-         "the new plan, to the day. The new monthly price applies in full "
-         "from the next cycle. The customer confirms the change, and the "
-         "prorated figures, before anything is applied."),
-        ("POL-PLAN-02", "When a plan change starts, and undoing one", "plans",
-         "An upgrade — moving to a higher-priced plan — starts straight away "
-         "and is prorated to the day. A downgrade starts at the next cycle "
-         "instead: there is no proration on a downgrade, and the customer "
-         "keeps the plan they have paid for until the cycle ends. A customer "
-         "who wants to leave or downgrade because of a fault is handled by "
-         "the billing team under the dispute policy, not by the plan-change "
-         "desk. A plan change can be reversed on the day it was made; "
-         "after that day, reversing it is the offers team's decision."),
-        ("POL-ID-01", "Verifying your identity", "identity",
-         "Before any change to an account or its money, identity is verified "
-         "with three things: the account number, the postcode on the account, "
-         "and a one-time code sent to the contact on file. Three failed code "
-         "attempts lock verification for the conversation and the customer "
-         "is offered a human agent."),
-        ("POL-PAY-01", "Payment arrangements", "payments",
-         "A customer who cannot pay in full may split a balance of $100 or "
-         "more into up to three monthly instalments, each of at least $25, "
-         "with no fee, as long as the account is not already in collections "
-         "and has no arrangement already running. The first instalment "
-         "falls due within 14 days and the rest follow monthly. The "
-         "arrangement is confirmed by the customer and recorded on the "
-         "account, with its amounts and dates. An instalment that passes "
-         "its date unpaid breaks the arrangement, and a broken arrangement "
-         "is handled by a person — it is not renegotiated in chat."),
-        ("POL-PAY-02", "Payment methods", "payments",
-         "The card on file can be replaced once identity is verified. Only "
-         "the last four digits are ever shown or stored in the conversation. "
-         "A replacement card takes effect for the next bill."),
-        ("POL-PAY-03", "Failed payments, refunds and autopay", "payments",
-         "When a payment is declined, the reason decides what happens "
-         "next. A soft decline — insufficient funds, or the processor not "
-         "answering — leaves the card usable, and the payment can be tried "
-         "again once the cause is fixed. A hard decline — an expired "
-         "card, a card reported lost, or a closed account — means that "
-         "card can never be charged again: it is not retried, and the "
-         "customer is asked for a new card instead. Refunds go back to "
-         "the payment method on the account, and nowhere else — not to "
-         "another card, not to a bank account, not by cheque. Money owed "
-         "back is read from the account, never from the conversation. "
-         "With autopay on, each bill is taken automatically from the "
-         "method on file; if that payment fails, the customer is told "
-         "what failed, and why, at their next contact."),
-        ("POL-ESC-01", "Speaking to a human", "escalation",
-         "A customer can always reach a human agent. The agent will first "
-         "offer to solve the problem itself; if the customer asks again, or "
-         "the problem cannot be solved in chat, the conversation transfers "
-         "with a summary so the customer does not repeat themselves."),
-        ("POL-CARE-01", "Stores and opening hours", "general",
-         "Northbeam stores are open Monday to Saturday, 9am to 6pm local "
-         "time. The support line is staffed 24 hours a day. Store staff can "
-         "help with SIM swaps and device setup in person."),
-        ("POL-CARE-02", "Complaints, feedback and how we contact you", "general",
-         "A complaint is recorded the moment a customer makes one — their "
-         "words, a category, and a reference the customer is given there "
-         "and then. A person responds in substance within five days; a "
-         "complaint still open after that is escalated to the care team. "
-         "Compliments and feedback are recorded too, in the customer's "
-         "own words. When a customer tells us how they need to be "
-         "contacted — large print, braille, easy read, email or text "
-         "instead of letters or calls — the need is recorded on the "
-         "account and honoured at every later contact. When a customer "
-         "tells us plainly about a bereavement, a serious illness or "
-         "money hardship, that is recorded on the account from their own "
-         "statement and a person from the care team handles the contact."),
-        ("POL-TECH-01", "Fixing connection problems", "technical",
-         "Connection problems are worked through in a fixed order: confirm "
-         "coverage, restart the device, reseat the SIM, then reset network "
-         "settings. Each step is checked before moving on. If the steps do "
-         "not restore service, a technician callback is booked. Broadband "
-         "faults start with a line test: a fault on the network side goes "
-         "straight to an engineer visit. The router power-cycle is a "
-         "safety step and is never skipped. A healthy home line holds at "
-         "least 25 Mbps on a speed test; below that, the fault is treated "
-         "as a line fault, not a device fault."),
+        ("POL-BILL-01", "Billing disputes", "billing"),
+        ("POL-BILL-02", "Goodwill credits", "billing"),
+        ("POL-BILL-03", "Reading your bill", "billing"),
+        ("POL-ROAM-01", "Roaming and the Roam Pass", "roaming"),
+        ("POL-ROAM-02", "Roaming fair use", "roaming"),
+        ("POL-ROAM-03", "Roaming projections and warnings", "roaming"),
+        ("POL-PLAN-01", "Changing your plan", "plans"),
+        ("POL-PLAN-02", "When a plan change starts, and undoing one", "plans"),
+        ("POL-ID-01", "Verifying your identity", "identity"),
+        ("POL-PAY-01", "Payment arrangements", "payments"),
+        ("POL-PAY-02", "Payment methods", "payments"),
+        ("POL-PAY-03", "Failed payments, refunds and autopay", "payments"),
+        ("POL-ESC-01", "Speaking to a human", "escalation"),
+        ("POL-CARE-01", "Stores and opening hours", "general"),
+        ("POL-CARE-02", "Complaints, feedback and how we contact you", "general"),
+        ("POL-TECH-01", "Fixing connection problems", "technical"),
     ]
-    return [PolicyDocument(doc_id=d, title=t, section=s, text=x) for d, t, s, x in rows]
+    return [PolicyDocument(doc_id=d, title=t, section=s,
+                           text=POLICY_TEXTS[d])
+            for d, t, s in rows]
 
 
 def build_procedures() -> list[Procedure]:
@@ -670,6 +564,7 @@ def seed_store(store) -> dict:
         store.set_embedding(doc.doc_id, embed(f"{doc.title}. {doc.text}"))
     for proc in procedures:
         store.save_procedure(proc)
+    prompt_count = seed_registry(store)
     _seed_credit_history(store)
     _seed_roaming_history(store)
     _seed_payment_history(store)
@@ -677,5 +572,5 @@ def seed_store(store) -> dict:
         "plans": len(plans), "offers": len(offers), "customers": len(customers),
         "accounts": len(accounts), "bills": len(bills),
         "policies": len(policies), "procedures": len(procedures),
-        "roaming_rates": len(rates),
+        "roaming_rates": len(rates), "prompts": prompt_count,
     }

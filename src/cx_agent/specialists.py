@@ -1709,13 +1709,14 @@ def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     # citation is unchanged: the second form says the same policy,
     # differently.
     flag = sig.get("second_form") or ""
-    if flag and flag != "bill" and expl_mod.has_second_form(flag) \
+    if flag and flag != "bill" \
+            and expl_mod.has_second_form(ctx.store, flag) \
             and flag not in sig.get("second_forms_used", []):
         sig["second_form_served"] = flag
         return SpecialistResult(
             specialist="care",
             findings=[Finding(topic="policy_second_form",
-                              text=expl_mod.second_form(flag))],
+                              text=expl_mod.second_form(ctx.store, flag))],
             citations=[flag], progress=True, resolved=True)
 
     docs = ctx.retriever.search(text, limit=2)

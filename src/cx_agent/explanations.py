@@ -13,91 +13,37 @@ shape, not the same words louder. That is what lives here:
   labelled as an example, so the shape of the thing is visible
   before the customer's own numbers are.
 
-The forms are data, keyed by the topic the supervisor tracked
-(the policy document a desk cited, or "bill" for the billing
-desk's own-bill explanation). A topic with no entry here has no
+The forms are prompt-registry data (round 13), keyed by the
+topic the supervisor tracked (the policy document a desk cited,
+or "bill" for the billing desk's own-bill explanation): each is
+the `explain.<topic>` entry, versioned and linted like every
+governed text, and resolved from the store at serve time — there
+is no second copy in this module. A topic with no entry has no
 second form — the confusion is still recorded, and the
 frustration and no-progress rules still protect the customer;
 nobody fakes a rephrase by re-serving the first form.
 
-The bill's second form is composed from the customer's own
-computed figures by bill_second_form below — summary-first: the
-total and due date lead, the driver follows, and only then the
-lines, read slowly.
+The bill's second form is the exception that proves the
+classification: it is composed from the customer's own computed
+figures by bill_second_form below — summary-first: the total and
+due date lead, the driver follows, and only then the lines, read
+slowly. It is a deterministic template over live figures, not a
+stored text, so it is not a registry entry.
 """
 
 from __future__ import annotations
 
-SECOND_FORMS: dict[str, str] = {
-    "POL-BILL-01": (
-        "The short version: if a charge looks wrong, name it and we check "
-        "it line by line — anything the bill itself proves wrong comes "
-        "back to you as a credit, anything that checks out stays, and "
-        "anything over the agent's limit goes to a person with the case "
-        "already written up. Say your bill shows Device protection at "
-        "$9.99 twice in one month: that second line is proven wrong by "
-        "the bill itself, so it is credited in full — you do not have to "
-        "argue it, and you do not pay it while it is checked."
-    ),
-    "POL-BILL-03": (
-        "Take a sample bill. It totals $58.54 for the month: a $45.00 "
-        "plan line, a $9.99 one-off device protection charge, and $3.55 "
-        "of tax — the total is just those lines added together. Your "
-        "bill reads the same way, so the three things worth checking "
-        "each month are the total, the due date, and any line that was "
-        "not on last month's bill: a new line is usually the one that "
-        "explains a jump."
-    ),
-    "POL-ROAM-02": (
-        "Say you use 8 GB in France on a plan with a 10 GB fair-use "
-        "amount: you are at 80%, so you get a heads-up message. Use the "
-        "full 10 GB and you get a second message, and from there "
-        "pay-as-you-go rates apply until the cycle resets. The clock "
-        "that matters is your billing cycle, not the length of the "
-        "trip — and both messages land before extra charges do."
-    ),
-    "POL-PLAN-01": (
-        "The short version: upgrading starts today, and you pay only "
-        "for the extra days — the part-month charge is worked out from "
-        "your real cycle dates, not a flat fee. Downgrading waits "
-        "until the cycle turns over, so you keep everything you have "
-        "already paid for until then. Either way, the exact figures "
-        "are quoted and confirmed with you before anything changes."
-    ),
-    "POL-PAY-01": (
-        "Say you owe $120 and agree an arrangement over three "
-        "instalments: $40 lands on the first date, $40 a month later, "
-        "$40 a month after that — each amount and date is on the "
-        "record before the first payment is due. Keep to the dates "
-        "and nothing else is owed; miss one and the arrangement "
-        "breaks, the full balance falls due, and a person picks the "
-        "case up."
-    ),
-    "POL-ID-01": (
-        "The short version: two steps. First your account number and "
-        "the postcode on the account, so we open the right record; "
-        "then the 6-digit code we send to the contact on file, so we "
-        "know it is you holding it. Three wrong codes lock the chat "
-        "and a person finishes verifying with you instead — the lock "
-        "is there so nobody can keep guessing at your account."
-    ),
-    "POL-CARE-01": (
-        "The short version: if you need a person, the support line is "
-        "the round-the-clock option — any hour, any day, including "
-        "account changes. Stores are the daytime option, 9am to 6pm "
-        "Monday to Saturday, and they are the only place for SIM swaps "
-        "and hands-on device checks. So: urgent or after hours, call "
-        "the line; hands-on with a device, visit a store in the day."
-    ),
-}
+from .prompts import PromptRegistry, explanation_prompt_id
 
 
-def has_second_form(topic: str) -> bool:
-    return topic in SECOND_FORMS
+def has_second_form(store, topic: str) -> bool:
+    return PromptRegistry(store).version_or_none(
+        explanation_prompt_id(topic)) is not None
 
 
-def second_form(topic: str) -> str:
-    return SECOND_FORMS[topic]
+def second_form(store, topic: str) -> str:
+    return PromptRegistry(store).active_text(
+        explanation_prompt_id(topic))
 
 
 def bill_second_form(issued_line: str, driver_line: str | None) -> str:

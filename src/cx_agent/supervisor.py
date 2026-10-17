@@ -260,7 +260,8 @@ class Supervisor:
         if confusion[0] and confusion[1]:
             topic = confusion[1]
             if topic not in sig.get("second_forms_used", []) and (
-                    topic == "bill" or expl_mod.has_second_form(topic)):
+                    topic == "bill"
+                    or expl_mod.has_second_form(self.store, topic)):
                 sig["second_form"] = topic
         return state
 
