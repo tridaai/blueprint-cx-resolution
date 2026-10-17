@@ -84,13 +84,16 @@ _FINAL_FAILURE = re.compile(
 # ---------------------------------------------------------------------------
 
 def _signal_section(store, conversation_ids: list[str]) -> dict:
-    """The round 11 measures over the day's conversations only:
-    average effort (the latest record per conversation), the
+    """The round 11 measures over the day's conversations only,
+    folded with the signal report's own counting rules: average
+    effort from the latest record per conversation, the
     rising-frustration share (any record in the series rising),
-    and the intervention outcomes folded over the day's records."""
+    and the intervention outcomes — second forms counted by
+    kind, offers by outcome, the acceptance rate over the
+    offers that were decided."""
     efforts: list[int] = []
     rising = 0
-    interventions: Counter = Counter()
+    offered = accepted = declined = lapsed = second_forms = 0
     for cid in conversation_ids:
         records = store.list_signal_records(cid)
         if not records:
@@ -100,9 +103,19 @@ def _signal_section(store, conversation_ids: list[str]) -> dict:
             rising += 1
         for record in records:
             for entry in record.interventions:
-                interventions[entry["kind"]] += 1
-    offered = interventions.get("early_offer_made", 0)
-    accepted = interventions.get("early_offer_accepted", 0)
+                kind = entry.get("kind", "")
+                outcome = entry.get("outcome", "")
+                if kind.startswith("second_form:"):
+                    second_forms += 1
+                elif outcome == "offered":
+                    offered += 1
+                elif outcome == "accepted":
+                    accepted += 1
+                elif outcome == "declined":
+                    declined += 1
+                elif outcome == "lapsed":
+                    lapsed += 1
+    decided = accepted + declined
     return {
         "conversations": len(efforts),
         "avg_effort": (round(sum(efforts) / len(efforts), 2)
@@ -113,11 +126,11 @@ def _signal_section(store, conversation_ids: list[str]) -> dict:
         "interventions": {
             "offered": offered,
             "accepted": accepted,
-            "declined": interventions.get("early_offer_declined", 0),
-            "lapsed": interventions.get("early_offer_lapsed", 0),
-            "second_forms": interventions.get("second_form_served", 0),
-            "acceptance_rate": (round(accepted / offered, 3)
-                                if offered else None),
+            "declined": declined,
+            "lapsed": lapsed,
+            "second_forms": second_forms,
+            "acceptance_rate": (round(accepted / decided, 3)
+                                if decided else None),
         },
     }
 
