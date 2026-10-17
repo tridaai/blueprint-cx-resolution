@@ -50,7 +50,8 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("slow data", 4), ("internet is slow", 4), ("data is slow", 4),
         ("connection", 2), ("coverage", 2), ("wifi calling", 4),
         ("wi-fi calling", 4), ("not working", 2), ("phone won't", 3),
-        ("dropped calls", 3), ("voicemail", 2),
+        ("dropped calls", 3), ("voicemail", 2), ("broadband", 4),
+        ("keeps dropping", 4), ("internet keeps dropping", 4),
     ],
     Intent.ACCOUNT: [
         ("payment method", 4), ("update my card", 4), ("new card", 3),
@@ -257,3 +258,19 @@ def classify_step_outcome(text: str) -> str:
     if any(re.search(p, lowered) for p in _STEP_SUCCESS):
         return "success"
     return "unclear"
+
+
+_SKIP_ATTEMPT = [
+    r"\bskip\b", r"\bjust fix it\b", r"\bdon'?t want to\b",
+    r"\bwon'?t do\b", r"\bnot doing that\b", r"\brefuse to\b",
+    r"\bno way\b", r"\bforget that step\b",
+]
+
+
+def classify_skip_attempt(text: str) -> bool:
+    """Is the customer trying to get out of the current step —
+    'skip that', 'just fix it', 'I won't do that'? Only meaningful
+    at a mandatory safety step, where the walker refuses in code;
+    anywhere else the words are just conversation."""
+    lowered = text.lower().strip()
+    return any(re.search(p, lowered) for p in _SKIP_ATTEMPT)

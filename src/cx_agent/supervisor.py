@@ -29,6 +29,7 @@ from . import actions as action_mod
 from . import billing_book
 from . import escalation as esc_mod
 from . import identity as id_mod
+from . import procedures
 from .config import Policy
 from .llm import DraftContext
 from .models import (
@@ -164,10 +165,40 @@ class Supervisor:
         if state["decision"].escalate:
             return "escalate"
         if conv.specialist_state.get("awaiting"):
-            return "identity"
+            if self._identity_detour_stale(state):
+                # A desk asked for identity mid-procedure and the
+                # customer has come back to the procedure instead.
+                # The detour is stale — drop it and route the turn;
+                # the walk-ownership rule below hands the reply to
+                # the technical desk, and the run resumes at its
+                # exact step. An identity detour never swallows a
+                # live procedure.
+                conv.specialist_state.pop("awaiting", None)
+                conv.specialist_state.pop("resume_intent", None)
+                conv.specialist_state.pop("resume_text", None)
+                conv.specialist_state.pop("resume_pending", None)
+            else:
+                return "identity"
         if conv.pending_action is not None:
             return "confirm"
         return "route"
+
+    def _identity_detour_stale(self, state: TurnState) -> bool:
+        """The identity detour is stale when a procedure run is
+        live and this message carries no identity material at all
+        — no account number, no postcode, no code. A message that
+        could be identity material always goes to the identity
+        node, detour or not."""
+        conv, text = state["conv"], state["text"]
+        tech = conv.specialist_state.get("technical", {})
+        run_id = tech.get("run_id")
+        if not run_id:
+            return False
+        run = self.store.get_procedure_run(run_id)
+        if run is None or run.state != "active":
+            return False
+        return not (_ACCOUNT_RE.search(text) or _POSTCODE_RE.search(text)
+                    or _CODE_RE.search(text))
 
     # -- identity flow ------------------------------------------------------
     def _identity(self, state: TurnState) -> TurnState:
@@ -292,6 +323,12 @@ class Supervisor:
                     self.store, conv, case_id, "declined", None,
                     note=(f"The customer declined the offered credit of "
                           f"{pending.amount}; nothing was applied."))
+            callback_id = pending.payload.get("callback_id")
+            if callback_id:
+                # The callback record settles with the answer too:
+                # the booking was offered and declined, on record.
+                procedures.settle_callback(self.store, callback_id,
+                                           "declined")
             conv.pending_action = None
             conv.specialist_state.pop("pending_desk", None)
             state["action_record"] = record
@@ -327,6 +364,18 @@ class Supervisor:
             return state
         record = action_mod.execute(self.store, conv, pending, self.policy,
                                     confirmed=True)
+        callback_id = pending.payload.get("callback_id")
+        if callback_id:
+            # The callback record settles on the booking's outcome:
+            # booked, with the executed action's id, or blocked at
+            # the final check with nothing applied.
+            if record.status == "executed":
+                procedures.settle_callback(self.store, callback_id,
+                                           "booked",
+                                           action_id=record.action_id)
+            else:
+                procedures.settle_callback(self.store, callback_id,
+                                           "blocked")
         case_id = pending.payload.get("dispute_case_id")
         if case_id:
             # The dispute case settles on the credit's outcome: the
@@ -670,6 +719,10 @@ class Supervisor:
         conv.status = "escalated"
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
+        # A live procedure walk is abandoned with the conversation —
+        # its run record closes with the reason, history intact for
+        # the human who picks the case up.
+        procedures.abandon_run(self.store, conv, "conversation_escalated")
         state["escalated"] = True
         prefix = ""
         result = state.get("result")

@@ -65,14 +65,22 @@ def test_corpus_and_procedures_cover_the_desks():
     assert {"billing", "roaming", "plans", "identity", "payments",
             "escalation", "general", "technical"} <= sections
     symptoms = {p.symptom for p in build_procedures()}
-    assert symptoms == {"no_signal", "slow_data", "wifi_calling"}
+    assert symptoms == {"no_signal", "slow_data", "wifi_calling",
+                        "broadband_drops"}
+    # Round 4 gold: Grace Liu's line test finds a network fault
+    # (her broadband walk branches to a field visit); every other
+    # account's line reads clear by default.
+    accounts = {a.account_number: a for a in build_accounts()}
+    assert accounts["NB-1005"].diagnostics == {"line_test": "fault_found"}
+    assert all(a.diagnostics == {} for n, a in accounts.items()
+               if n != "NB-1005")
 
 
 def test_seed_writes_everything_with_embeddings():
     store = InMemoryStore()
     counts = seed_store(store)
     assert counts == {"plans": 4, "offers": 3, "customers": 12, "accounts": 12,
-                      "bills": 12, "policies": 12, "procedures": 3}
+                      "bills": 12, "policies": 12, "procedures": 4}
     embeddings = store.list_embeddings()
     assert len(embeddings) == 12
     assert all(len(vec) == 384 for _doc, vec in embeddings)

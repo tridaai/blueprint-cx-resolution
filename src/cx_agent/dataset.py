@@ -307,19 +307,29 @@ def build_policies() -> list[PolicyDocument]:
          "Connection problems are worked through in a fixed order: confirm "
          "coverage, restart the device, reseat the SIM, then reset network "
          "settings. Each step is checked before moving on. If the steps do "
-         "not restore service, a technician callback is booked."),
+         "not restore service, a technician callback is booked. Broadband "
+         "faults start with a line test: a fault on the network side goes "
+         "straight to an engineer visit. The router power-cycle is a "
+         "safety step and is never skipped. A healthy home line holds at "
+         "least 25 Mbps on a speed test; below that, the fault is treated "
+         "as a line fault, not a device fault."),
     ]
     return [PolicyDocument(doc_id=d, title=t, section=s, text=x) for d, t, s, x in rows]
 
 
 def build_procedures() -> list[Procedure]:
+    """The procedures, as data. The engine (procedures.py) walks
+    these records — kinds, thresholds, branch tables, safety
+    flags — so a procedure is edited here (as a new version),
+    never in the walker."""
     return [
         Procedure(procedure_id="PROC-NOSIGNAL", title="No signal",
                   symptom="no_signal",
+                  symptom_phrases=["no signal", "no service", "signal"],
                   steps=[
-                      ProcedureStep(step_id="NS-1",
+                      ProcedureStep(step_id="NS-1", kind="tool_check",
                                     instruction="Check the coverage at your postcode — one moment while I look.",
-                                    check="coverage_ok", on_fail="escalate"),
+                                    check="coverage_ok"),
                       ProcedureStep(step_id="NS-2",
                                     instruction="Restart your phone and tell me whether the signal bars come back.",
                                     check="signal_restored", on_fail="next"),
@@ -332,10 +342,11 @@ def build_procedures() -> list[Procedure]:
                   ]),
         Procedure(procedure_id="PROC-SLOWDATA", title="Slow data",
                   symptom="slow_data",
+                  symptom_phrases=["slow"],
                   steps=[
-                      ProcedureStep(step_id="SD-1",
+                      ProcedureStep(step_id="SD-1", kind="tool_check",
                                     instruction="Let me check how much of your data allowance is left this cycle.",
-                                    check="allowance_ok", on_fail="next"),
+                                    check="allowance_ok"),
                       ProcedureStep(step_id="SD-2",
                                     instruction="Turn airplane mode on for 30 seconds, then off, and run a quick page load. Faster now?",
                                     check="speed_restored", on_fail="next"),
@@ -345,6 +356,7 @@ def build_procedures() -> list[Procedure]:
                   ]),
         Procedure(procedure_id="PROC-WIFICALL", title="Wi-Fi calling setup",
                   symptom="wifi_calling",
+                  symptom_phrases=["wifi calling", "wi-fi calling"],
                   steps=[
                       ProcedureStep(step_id="WC-1",
                                     instruction="Open Settings → Phone → Wi-Fi Calling and switch it on; confirm your emergency address if asked.",
@@ -352,6 +364,40 @@ def build_procedures() -> list[Procedure]:
                       ProcedureStep(step_id="WC-2",
                                     instruction="Connect to your Wi-Fi network and place a short test call. Did it connect over Wi-Fi?",
                                     check="call_connected", on_fail="callback"),
+                  ]),
+        Procedure(procedure_id="PROC-BROADBAND", title="Broadband keeps dropping",
+                  symptom="broadband_drops",
+                  symptom_phrases=["broadband", "keeps dropping",
+                                   "dropping out", "keeps disconnecting"],
+                  requires_account=True,
+                  steps=[
+                      ProcedureStep(step_id="BB-1", kind="tool_check",
+                                    instruction="Run a line test on the line.",
+                                    check="line_test",
+                                    branches={"fault_found": "BB-6"}),
+                      ProcedureStep(step_id="BB-2", mandatory_safety=True,
+                                    instruction="First, a safety step we never skip: unplug the router from the wall socket and check the plug and cable as you do — if anything looks damaged or smells of burning, stop and tell me. Otherwise leave it unplugged for a full minute, then tell me it's unplugged.",
+                                    check="router_power_cycled", on_fail="next"),
+                      ProcedureStep(step_id="BB-3", kind="measurement",
+                                    instruction="Plug the router back in and give the lights a minute to settle. Then run a speed test — any speed-test app or site — and tell me the download number it shows, in Mbps.",
+                                    metric="download_mbps", unit="Mbps",
+                                    threshold=D("25"),
+                                    below_step="BB-4",
+                                    at_or_above_step="BB-7"),
+                      ProcedureStep(step_id="BB-4", kind="branch",
+                                    rule="speed_critical",
+                                    threshold=D("10"),
+                                    branches={"critical": "BB-6",
+                                              "normal": "BB-5"}),
+                      ProcedureStep(step_id="BB-5",
+                                    instruction="Reseat the cable between the wall socket and the router — push both ends in until they click — then run the speed test once more. Better now?",
+                                    check="speed_restored", on_fail="next"),
+                      ProcedureStep(step_id="BB-6", kind="terminal",
+                                    outcome="escalate_field_visit",
+                                    instruction="The readings point to a fault on the line itself, so this needs an engineer visit rather than more steps here."),
+                      ProcedureStep(step_id="BB-7", kind="terminal",
+                                    outcome="resolved",
+                                    instruction="That reading is healthy — the power cycle cleared the fault state. Your broadband should stay up now; if it drops again, quote this conversation and we'll pick up right here."),
                   ]),
     ]
 

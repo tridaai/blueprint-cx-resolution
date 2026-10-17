@@ -8,10 +8,9 @@ rests on. Specialists never format the final reply and never
 execute anything; execution is actions.py, composition is the
 supervisor's, and both re-check the rules at their own moment.
 
-The desks work their happy paths; their deepening — dispute
-tiers, the full procedure engine, proration edge cases — is
-scheduled in the round map, not improvised here. Rerouting
-between desks lives in the supervisor (round 2), not here.
+The desks work their happy paths; their deepening is scheduled
+in the round map, not improvised here. Rerouting between desks
+lives in the supervisor (round 2), not here.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from .models import (
     ProposedAction,
     SpecialistResult,
 )
-from .routing import classify_step_outcome
+from . import procedures
 
 
 @dataclass
@@ -548,142 +547,53 @@ def offers(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 # Technical support — guided procedures
 # ---------------------------------------------------------------------------
 
-_AUTO_CHECKS = {"coverage_ok", "allowance_ok"}  # the agent tests these itself
-
-# Checks that mean "the symptom is gone" when they pass, as opposed
-# to set-up steps (switching Wi-Fi calling on) that pass and advance.
-_RESOLUTION_CHECKS = {"signal_restored", "speed_restored", "call_connected"}
-
-
-def _present_step(proc, index: int, ctx: Ctx, conv: Conversation,
-                  account) -> tuple[int, list[Finding]]:
-    """Skip agent-side checks (running the tool), land on the next
-    customer step, and return (index, findings)."""
-    findings: list[Finding] = []
-    while index < len(proc.steps) and proc.steps[index].check in _AUTO_CHECKS:
-        step = proc.steps[index]
-        if step.check == "coverage_ok":
-            findings.append(Finding(
-                topic="check",
-                text="I've checked coverage at your postcode: no outage is "
-                     "reported there, so let's work through the device side."))
-        elif step.check == "allowance_ok":
-            findings.append(Finding(
-                topic="check",
-                text="I've checked your data allowance: that isn't what's "
-                     "slowing you down."))
-        index += 1
-    if index < len(proc.steps):
-        findings.append(Finding(
-            topic="step", text=proc.steps[index].instruction))
-    return index, findings
-
 
 def technical(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
+    """The desk is a thin adapter over the procedure engine
+    (procedures.py): procedures are versioned data, a walk is a
+    stored run with its full step history, and a dead end books
+    its callback as a record carrying the transcript. The desk
+    owns the conversation-shaped edges — the callback proposal
+    that follows identity, the account a procedure needs before
+    its tools can run, and the symptom that starts a walk."""
     state = conv.specialist_state.setdefault("technical", {})
-    lowered = text.lower()
 
     if state.get("want_callback") and conv.account_number:
-        proc_id = state.pop("want_callback")
+        state.pop("want_callback")
+        proc = ctx.store.get_procedure(state.get("procedure_id", ""))
+        if proc is not None:
+            return procedures.callback_proposal(ctx, conv, proc)
+
+    run = None
+    if state.get("run_id"):
+        candidate = ctx.store.get_procedure_run(state["run_id"])
+        if candidate is not None and candidate.state == "active":
+            run = candidate
+        elif candidate is not None and candidate.state == "dead_ended" \
+                and state.get("want_callback"):
+            run = None  # the dead end is parked on its identity ask
+        else:
+            state.pop("run_id", None)
+            state.pop("procedure_id", None)
+    if run is not None:
+        return procedures.advance(ctx, conv, run, text)
+
+    if state.get("want_callback"):
+        # The dead end is waiting on identity the supervisor is
+        # already collecting; hold the turn rather than starting
+        # a second walk over the top of it.
         return SpecialistResult(
             specialist="technical",
             findings=[Finding(
-                topic="steps_exhausted",
-                text="Thank you — identity confirmed. As promised, this one "
-                     "goes to a technician rather than more guesswork.")],
-            proposed_action=ProposedAction(
-                kind=ActionKind.BOOK_CALLBACK,
-                summary="book a technician callback within one working day",
-                payload={"reason": proc_id},
-                basis="Guided procedure exhausted without resolution (POL-TECH-01)."),
-            citations=_cite(ctx, "technical", "troubleshooting steps callback technician"),
-            progress=True)
+                topic="identity",
+                text=("Once I have your account number and postcode I "
+                      "can book that technician callback straight "
+                      "away."))],
+            needs_identity=True, progress=True)
 
-    if state.get("procedure_id"):
-        proc = ctx.store.get_procedure(state["procedure_id"])
-        index = state.get("step_index", 0)
-        step = proc.steps[index]
-        outcome = classify_step_outcome(text)
-        if outcome == "unclear":
-            return SpecialistResult(
-                specialist="technical",
-                findings=[Finding(topic="step_repeat",
-                                  text=f"Just to be sure we're on the same step: {step.instruction} "
-                                       "Tell me yes if it worked, or no if nothing changed.")],
-                progress=False)
-        if outcome == "success":
-            if step.check in _RESOLUTION_CHECKS:
-                # The step's check IS the symptom disappearing —
-                # success here ends the procedure, it doesn't advance it.
-                state.pop("procedure_id", None)
-                state.pop("step_index", None)
-                return SpecialistResult(
-                    specialist="technical",
-                    findings=[Finding(
-                        topic="resolved",
-                        text="That's the fix — your service should stay up now. "
-                             "If it drops again, quote this conversation and "
-                             "we'll pick up right here.")],
-                    progress=True, resolved=True)
-            nxt, findings = _present_step(proc, index + 1, ctx, conv,
-                                          _account(ctx, conv))
-            if nxt >= len(proc.steps):
-                state.pop("procedure_id", None)
-                state.pop("step_index", None)
-                findings.append(Finding(
-                    topic="resolved",
-                    text="That's the fix — your service should stay up now. "
-                         "If it drops again, quote this conversation and we'll "
-                         "pick up right here."))
-                return SpecialistResult(specialist="technical", findings=findings,
-                                        progress=True, resolved=True)
-            state["step_index"] = nxt
-            return SpecialistResult(specialist="technical", findings=findings,
-                                    progress=True)
-        # outcome == fail
-        if step.on_fail == "next" and index + 1 < len(proc.steps):
-            nxt, findings = _present_step(proc, index + 1, ctx, conv,
-                                          _account(ctx, conv))
-            state["step_index"] = nxt
-            findings.insert(0, Finding(
-                topic="step_failed",
-                text="Understood — that step didn't do it. Next one:"))
-            return SpecialistResult(specialist="technical", findings=findings,
-                                    progress=True)
-        # on_fail == callback (or the steps ran out)
-        state.pop("procedure_id", None)
-        state.pop("step_index", None)
-        if not conv.account_number:
-            result = _needs_identity(
-                "technical",
-                "We've worked through the guided steps without restoring "
-                "service. I'd like to book a technician callback — " + _IDENTITY_ASK)
-            result.specialist = "technical"
-            conv.specialist_state["technical"]["want_callback"] = proc.procedure_id
-            return result
-        return SpecialistResult(
-            specialist="technical",
-            findings=[Finding(
-                topic="steps_exhausted",
-                text=(f"We've worked through the {proc.title} steps and the "
-                      "problem is still there, so this needs a technician."))],
-            proposed_action=ProposedAction(
-                kind=ActionKind.BOOK_CALLBACK,
-                summary="book a technician callback within one working day",
-                payload={"reason": proc.procedure_id},
-                basis="Guided procedure exhausted without resolution (POL-TECH-01)."),
-            citations=_cite(ctx, "technical", "troubleshooting steps callback technician"),
-            progress=True)
-
-    # Start a procedure from the symptom.
-    symptom = None
-    if "no signal" in lowered or "no service" in lowered or "signal" in lowered:
-        symptom = "no_signal"
-    elif "slow" in lowered:
-        symptom = "slow_data"
-    elif "wifi calling" in lowered or "wi-fi calling" in lowered:
-        symptom = "wifi_calling"
-    proc = next((p for p in ctx.store.list_procedures() if p.symptom == symptom), None)
+    # Start a procedure from the symptom — matched on the phrases
+    # the procedure's own data carries.
+    proc = procedures.match_procedure(ctx.store, text)
     if proc is None:
         return SpecialistResult(
             specialist="technical",
@@ -694,17 +604,12 @@ def technical(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                       "it started — and I'll either find the right steps or "
                       "book you a technician."))],
             progress=False)
-    nxt, findings = _present_step(proc, 0, ctx, conv, _account(ctx, conv))
-    if nxt >= len(proc.steps):
-        return SpecialistResult(specialist="technical", findings=findings,
-                                progress=True, resolved=True)
-    state["procedure_id"] = proc.procedure_id
-    state["step_index"] = nxt
-    findings.insert(0, Finding(
-        topic="procedure_start",
-        text=f"Let's work through the {proc.title} steps in order — they fix "
-             "most cases like this."))
-    return SpecialistResult(specialist="technical", findings=findings, progress=True)
+    if proc.requires_account and not conv.account_number:
+        return _needs_identity(
+            "technical",
+            "I can run a line test on that straight away — it finds "
+            "most of these. " + _IDENTITY_ASK)
+    return procedures.start_run(ctx, conv, proc)
 
 
 # ---------------------------------------------------------------------------
