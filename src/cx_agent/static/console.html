@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CX Resolution Agent — Console</title>
+<style>
+  :root { --indigo:#4F46E5; --ink:#0A0A0A; --mut:#5b5b66; --line:#e4e4ea; --bg:#ffffff; --panel:#f7f7fb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Plus Jakarta Sans", system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; align-items:center; gap:14px; padding:18px 28px; border-bottom:1px solid var(--line); }
+  header img { width:40px; height:40px; }
+  header h1 { font-size:20px; margin:0; }
+  header .sub { color:var(--mut); font-size:13px; }
+  header .spacer { flex:1; }
+  button { background:var(--indigo); color:#fff; border:0; border-radius:8px; padding:8px 14px; font:inherit; font-size:14px; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--indigo); border:1px solid var(--indigo); }
+  main { display:grid; grid-template-columns: 320px 1fr 360px; gap:0; min-height: calc(100vh - 140px); }
+  section { padding:18px; border-right:1px solid var(--line); overflow:auto; }
+  section:last-child { border-right:0; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--mut); margin:4px 0 12px; }
+  .conv { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; cursor:pointer; background:#fff; }
+  .conv.active { border-color:var(--indigo); background:var(--panel); }
+  .conv .meta { font-size:12px; color:var(--mut); }
+  .chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:99px; background:#eef; color:var(--indigo); margin-right:4px; }
+  .chip.red { background:#fdecec; color:#b3261e; }
+  .chip.green { background:#e7f6ec; color:#137333; }
+  #chat { display:flex; flex-direction:column; height:100%; }
+  #messages { flex:1; overflow:auto; padding:6px 2px; }
+  .msg { max-width:78%; padding:10px 13px; border-radius:14px; margin:7px 0; line-height:1.45; font-size:14.5px; white-space:pre-wrap; }
+  .msg.customer { background:var(--panel); align-self:flex-start; border:1px solid var(--line); }
+  .msg.agent { background:var(--indigo); color:#fff; align-self:flex-end; margin-left:auto; }
+  .composer { display:flex; gap:8px; padding-top:10px; border-top:1px solid var(--line); }
+  .composer input { flex:1; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  .esc { border:1px solid #f0c6c2; background:#fff7f6; border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:13.5px; }
+  .esc h3 { margin:0 0 6px; font-size:14px; }
+  .esc .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .esc ul { margin:4px 0 8px 16px; padding:0; }
+  .empty { color:var(--mut); font-size:14px; }
+  footer { display:flex; align-items:center; gap:16px; padding:14px 28px; border-top:1px solid var(--line); font-size:14px; }
+  footer img { width:24px; height:24px; }
+  footer a { color:var(--indigo); text-decoration:none; font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <img src="https://trida.ai/logos-rounded/trida-rounded.png" alt="Trida AI">
+  <div>
+    <h1>CX Resolution Agent</h1>
+    <div class="sub">Northbeam Mobile — operator console (reference prototype)</div>
+  </div>
+  <div class="spacer"></div>
+  <span id="backend" class="chip">backend: …</span>
+  <button class="ghost" onclick="seed()">Seed data</button>
+  <button onclick="newConversation()">New conversation</button>
+</header>
+<main>
+  <section>
+    <h2>Conversations</h2>
+    <div id="conversations"><p class="empty">None yet — start one.</p></div>
+  </section>
+  <section>
+    <h2>Chat simulator</h2>
+    <div id="chat">
+      <div id="messages"><p class="empty">Pick or start a conversation, then talk to the agent as a customer would.</p></div>
+      <div class="composer">
+        <input id="draft" placeholder="Type as the customer…" onkeydown="if(event.key==='Enter')send()">
+        <button onclick="send()">Send</button>
+      </div>
+    </div>
+  </section>
+  <section>
+    <h2>Escalation queue — handoff packets</h2>
+    <div id="escalations"><p class="empty">No escalations. When the agent hands off, the packet it built for the human lands here.</p></div>
+  </section>
+</main>
+<footer>
+  <img src="https://trida.ai/logos-rounded/trida-rounded.png" alt="Trida AI">
+  <span>Built by Trida AI</span>
+  <a href="https://trida.ai">Visit Trida AI →</a>
+  <a href="https://trida.ai/blog?category=blueprints">View all blueprints →</a>
+</footer>
+<script>
+let current = null;
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  if (!resp.ok) throw new Error(path + " -> " + resp.status);
+  return resp.json();
+}
+
+async function seed() {
+  await api("/seed", {method: "POST"});
+  await refresh();
+}
+
+async function newConversation() {
+  const data = await api("/conversations", {method: "POST"});
+  current = data.conversation_id;
+  document.getElementById("messages").innerHTML = "";
+  await refresh();
+}
+
+async function send() {
+  const input = document.getElementById("draft");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!current) await newConversation();
+  input.value = "";
+  addMessage("customer", text);
+  const result = await api(`/conversations/${current}/messages`, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text})
+  });
+  addMessage("agent", result.reply);
+  if (result.escalated) addMessage("agent", "— transferred to a human (" + result.escalation_reason + ") —");
+  await refresh();
+}
+
+function addMessage(role, text) {
+  const box = document.getElementById("messages");
+  if (box.querySelector(".empty")) box.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function openConversation(id) {
+  current = id;
+  const conv = await api(`/conversations/${id}`);
+  const box = document.getElementById("messages");
+  box.innerHTML = "";
+  for (const m of conv.messages) addMessage(m.role, m.text);
+  await refresh();
+}
+
+function chipFor(status) {
+  if (status === "escalated") return '<span class="chip red">escalated</span>';
+  if (status === "resolved") return '<span class="chip green">resolved</span>';
+  return '<span class="chip">active</span>';
+}
+
+async function refresh() {
+  try {
+    const ready = await api("/readiness");
+    document.getElementById("backend").textContent =
+      "store: " + ready.store + " · model: " + ready.llm_backend;
+  } catch (e) { /* not seeded yet */ }
+  const data = await api("/conversations");
+  const box = document.getElementById("conversations");
+  if (!data.conversations.length) {
+    box.innerHTML = '<p class="empty">None yet — start one.</p>';
+  } else {
+    box.innerHTML = "";
+    for (const c of data.conversations) {
+      const div = document.createElement("div");
+      div.className = "conv" + (c.conversation_id === current ? " active" : "");
+      div.innerHTML = chipFor(c.status) +
+        '<span class="chip">' + c.intent + '</span>' +
+        '<div class="meta">' + c.conversation_id + ' · ' + (c.account_number || "no account yet") +
+        ' · ' + c.identity_state + ' · ' + c.turns + ' turns</div>' +
+        '<div>' + (c.last_message || "") + '</div>';
+      div.onclick = () => openConversation(c.conversation_id);
+      box.appendChild(div);
+    }
+  }
+  const esc = await api("/escalations");
+  const ebox = document.getElementById("escalations");
+  if (!esc.escalations.length) {
+    ebox.innerHTML = '<p class="empty">No escalations. When the agent hands off, the packet it built for the human lands here.</p>';
+  } else {
+    ebox.innerHTML = "";
+    for (const e of esc.escalations) {
+      const p = e.packet;
+      const div = document.createElement("div");
+      div.className = "esc";
+      div.innerHTML = "<h3>" + e.escalation_id + " — queue: " + e.queue + "</h3>" +
+        '<div class="k">Reason</div><div>' + e.reason + '</div>' +
+        '<div class="k">Customer</div><div>' + (p.customer_name || "—") + " · " + (p.account_number || "—") +
+        " · identity: " + p.identity_state + '</div>' +
+        '<div class="k">Summary</div><div>' + p.summary + '</div>' +
+        '<div class="k">Attempts</div><ul>' + p.attempts.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
+        '<div class="k">Actions taken</div><ul>' + p.actions_taken.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
+        '<div class="k">Open items</div><ul>' + p.open_items.map(a => "<li>" + a + "</li>").join("") + '</ul>';
+      ebox.appendChild(div);
+    }
+  }
+}
+
+refresh();
+</script>
+</body>
+</html>
