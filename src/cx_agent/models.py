@@ -45,6 +45,46 @@ class Offer(BaseModel):
     duration_days: int | None = None
     eligible_plan_ids: list[str] = Field(default_factory=list)
     blurb: str = ""
+    # What a roaming pass includes before per-GB billing starts
+    # again (the Roam Pass: 1 GB a day). The trip-quote math reads
+    # it from the offer, never from prose.
+    included_gb_per_day: Decimal | None = None
+
+
+class RoamingRate(BaseModel):
+    """The destination rate table, as data: what pay-as-you-go
+    roaming data costs per GB in a destination. Every roaming
+    figure the agent quotes is priced from these rows — the model
+    never supplies a price."""
+
+    destination: str  # the country name customers use
+    per_gb: Decimal
+
+
+class RoamingNotice(BaseModel):
+    """A fair-use warning as a stored record — the proactive
+    summary artifact. Created when roaming usage crosses a
+    fair-use mark (80%, then 100% of the ceiling), carrying the
+    computed figures the customer was shown: usage, ceiling,
+    pace, and the projected overage cost. The record is also the
+    evidence a later roaming dispute reads: a charge the customer
+    was warned about stands; a crossing with no warning on record
+    before it is itself flagged here (`unwarned_crossing`) as a
+    policy event."""
+
+    notice_id: str
+    account_number: str
+    kind: str  # fair_use_80 | fair_use_100
+    destination: str = ""
+    trip_start: str = ""  # ISO date the trip began (the account's)
+    used_gb: Decimal = Decimal("0")
+    cap_gb: Decimal = Decimal("0")
+    pct: Decimal = Decimal("0")  # used as a % of the ceiling
+    projected_overage_cost: Decimal | None = None
+    summary: str = ""  # the customer-facing text, composed from the figures
+    conversation_id: str = ""  # "" when the network side raised it
+    unwarned_crossing: bool = False  # 100% crossed with no prior warning
+    created_date: str = ""  # ISO date
 
 
 class BillCharge(BaseModel):
@@ -81,6 +121,12 @@ class Account(BaseModel):
     payment_method_last4: str | None = None
     roaming_country: str | None = None  # set while the customer travels
     roaming_gb_used: Decimal = Decimal("0")
+    roaming_since: str = ""  # ISO date the current trip began
+    # The usage profile: how much data this customer typically
+    # uses in a day. Trip quotes are priced from it (days × this
+    # figure), so a projection is the customer's own pattern
+    # priced at the destination rate — not a generic guess.
+    typical_daily_data_gb: Decimal = Decimal("0.5")
     # What the network-side diagnostic tools read for this account
     # (e.g. {"line_test": "fault_found"}). Absent a reading, a tool
     # reports its neutral result — the book states facts, tools

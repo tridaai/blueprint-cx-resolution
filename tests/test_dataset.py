@@ -79,8 +79,9 @@ def test_corpus_and_procedures_cover_the_desks():
 def test_seed_writes_everything_with_embeddings():
     store = InMemoryStore()
     counts = seed_store(store)
-    assert counts == {"plans": 4, "offers": 3, "customers": 12, "accounts": 12,
-                      "bills": 12, "policies": 13, "procedures": 4}
+    assert counts == {"plans": 4, "offers": 3, "customers": 14, "accounts": 14,
+                      "bills": 16, "policies": 14, "procedures": 4,
+                      "roaming_rates": 16}
     embeddings = store.list_embeddings()
-    assert len(embeddings) == 13
+    assert len(embeddings) == 14
     assert all(len(vec) == 384 for _doc, vec in embeddings)

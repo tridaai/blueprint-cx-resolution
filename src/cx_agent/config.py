@@ -65,6 +65,12 @@ class Policy:
     # Roaming fair-use ceiling per trip, in GB, from the roaming
     # policy corpus. Past it the agent must warn before selling more.
     roaming_fair_use_gb: int = 25
+    # Roaming bill-shock threshold: when the projected
+    # pay-as-you-go cost of a trip passes this, the projection and
+    # the pass comparison lead the conversation — no chargeable
+    # roaming product is proposed until the customer has seen
+    # them (POL-ROAM-03).
+    roaming_bill_shock_amount: Decimal = Decimal("50.00")
     # Unproductive turns in a row before the conversation escalates.
     max_no_progress_turns: int = 3
     # One-time-code attempts before verification locks.
@@ -96,6 +102,8 @@ class Policy:
             bill_shock_threshold_pct=dec(
                 "CX_BILL_SHOCK_THRESHOLD_PCT", str(base.bill_shock_threshold_pct)),
             roaming_fair_use_gb=num("CX_ROAMING_FAIR_USE_GB", base.roaming_fair_use_gb),
+            roaming_bill_shock_amount=dec(
+                "CX_ROAMING_BILL_SHOCK_AMOUNT", str(base.roaming_bill_shock_amount)),
             max_no_progress_turns=num("CX_MAX_NO_PROGRESS_TURNS", base.max_no_progress_turns),
             otp_max_attempts=num("CX_OTP_MAX_ATTEMPTS", base.otp_max_attempts),
             human_requests_before_escalation=num(

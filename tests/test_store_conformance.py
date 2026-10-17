@@ -41,7 +41,7 @@ def test_store_contract(kind, tmp_path):
     bill = store.get_bill_for_account("NB-1001")
     assert bill.total == Decimal("94.35")
     assert store.get_customer_by_account("NB-1001").full_name == "Amara Osei"
-    assert store.count_customers() == 12
+    assert store.count_customers() == 14
 
     conv = Conversation(conversation_id="CONV-X")
     store.save_conversation(conv)
@@ -50,7 +50,7 @@ def test_store_contract(kind, tmp_path):
     assert loaded.identity_state.value == "unverified"
 
     vectors = store.list_embeddings()
-    assert len(vectors) == 13
+    assert len(vectors) == 14
     assert all(len(v) == 384 for _d, v in vectors)
     with pytest.raises(EmbeddingDimensionError):
         store.set_embedding("POL-BILL-01", [0.1, 0.2])

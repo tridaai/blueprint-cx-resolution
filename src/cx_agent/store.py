@@ -55,6 +55,8 @@ from .models import (
     PolicyDocument,
     Procedure,
     ProcedureRun,
+    RoamingNotice,
+    RoamingRate,
 )
 
 DEFAULT_SQLITE_PATH = "data/cx.db"
@@ -136,6 +138,12 @@ class Store(Protocol):
     def get_callback(self, callback_id: str) -> CallbackRecord | None: ...
     def list_callbacks(self, conversation_id: str | None = None
                        ) -> list[CallbackRecord]: ...
+    def save_roaming_rate(self, r: RoamingRate) -> None: ...
+    def get_roaming_rate(self, destination: str) -> RoamingRate | None: ...
+    def list_roaming_rates(self) -> list[RoamingRate]: ...
+    def save_roaming_notice(self, n: RoamingNotice) -> None: ...
+    def list_roaming_notices(self, account_number: str | None = None
+                             ) -> list[RoamingNotice]: ...
 
     # conversation records
     def save_conversation(self, c: Conversation) -> None: ...
@@ -169,6 +177,8 @@ class InMemoryStore:
         self.procedures: dict[str, Procedure] = {}
         self.procedure_runs: dict[str, ProcedureRun] = {}
         self.callbacks: dict[str, CallbackRecord] = {}
+        self.roaming_rates: dict[str, RoamingRate] = {}
+        self.roaming_notices: dict[str, RoamingNotice] = {}
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
@@ -268,6 +278,25 @@ class InMemoryStore:
         if conversation_id:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: r.callback_id)
+
+    def save_roaming_rate(self, r):
+        self._put(self.roaming_rates, r.destination.lower(), r)
+
+    def get_roaming_rate(self, destination):
+        return self._get(self.roaming_rates, destination.lower())
+
+    def list_roaming_rates(self):
+        return sorted(self._all(self.roaming_rates),
+                      key=lambda r: r.destination)
+
+    def save_roaming_notice(self, n):
+        self._put(self.roaming_notices, n.notice_id, n)
+
+    def list_roaming_notices(self, account_number=None):
+        rows = self._all(self.roaming_notices)
+        if account_number:
+            rows = [n for n in rows if n.account_number == account_number]
+        return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
     def save_conversation(self, c): self._put(self.conversations, c.conversation_id, c)
     def get_conversation(self, cid): return self._get(self.conversations, cid)
     def list_conversations(self): return self._all(self.conversations)
@@ -320,6 +349,8 @@ _TABLES = {
     "procedures": ("procedure_id", Procedure),
     "procedure_runs": ("run_id", ProcedureRun),
     "callbacks": ("callback_id", CallbackRecord),
+    "roaming_rates": ("destination", RoamingRate),
+    "roaming_notices": ("notice_id", RoamingNotice),
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
@@ -438,6 +469,26 @@ class _SqlStore:
         if conversation_id:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: r.callback_id)
+
+    # Roaming rates key on the destination, lower-cased like the
+    # in-memory store, so a lookup never misses on capitalisation.
+    def save_roaming_rate(self, r):
+        self._save("roaming_rates", r.destination.lower(), r)
+
+    def get_roaming_rate(self, destination):
+        return self._load("roaming_rates", destination.lower())
+
+    def list_roaming_rates(self):
+        return sorted(self._load_all("roaming_rates"),
+                      key=lambda r: r.destination)
+
+    def save_roaming_notice(self, n): self._save("roaming_notices", n.notice_id, n)
+
+    def list_roaming_notices(self, account_number=None):
+        rows = self._load_all("roaming_notices")
+        if account_number:
+            rows = [n for n in rows if n.account_number == account_number]
+        return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
     def save_conversation(self, c): self._save("conversations", c.conversation_id, c)
     def get_conversation(self, cid): return self._load("conversations", cid)
     def list_conversations(self): return self._load_all("conversations")

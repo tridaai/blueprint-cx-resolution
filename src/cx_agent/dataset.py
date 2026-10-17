@@ -8,6 +8,12 @@ roaming against a 25 GB fair-use ceiling, Marcus Webb's add-on fee
 really is marked as charged after cancellation. The specialists
 reason over these records with tools; nothing is staged inside a
 prompt.
+
+Round 6 adds the roaming book's facts: a destination rate table,
+a usage profile on every account, Nadia Hassan past the fair-use
+ceiling in Greece with no warning on record anywhere, and Chris
+Novak's Roam Pass — activated on the record before his Italy
+trip, so his roaming charge is covered by it.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from .models import (
     PolicyDocument,
     Procedure,
     ProcedureStep,
+    RoamingRate,
 )
 
 D = Decimal
@@ -48,6 +55,7 @@ def build_offers() -> list[Offer]:
         Offer(offer_id="OFF-ROAM10", name="Roam Pass — 10 days", kind="roaming_pass",
               one_off_price=D("30.00"), duration_days=10,
               eligible_plan_ids=["PLAN-BAS", "PLAN-ESS", "PLAN-UNL", "PLAN-FAM"],
+              included_gb_per_day=D("1"),
               blurb="Unlimited calls and texts plus 1 GB of data a day in 40+ countries."),
         Offer(offer_id="OFF-UPG-LOYAL", name="Loyalty upgrade to Unlimited Max",
               kind="plan_upgrade", monthly_price=D("60.00"), target_plan_id="PLAN-UNL",
@@ -58,6 +66,22 @@ def build_offers() -> list[Offer]:
               eligible_plan_ids=["PLAN-BAS", "PLAN-ESS", "PLAN-FAM"],
               blurb="A one-off 10 GB top-up that lasts to the end of the cycle."),
     ]
+
+
+def build_roaming_rates() -> list[RoamingRate]:
+    """Pay-as-you-go data per GB, by destination. Trip quotes,
+    bill-shock projections and fair-use overage costs are all
+    priced from this table and nowhere else."""
+    rows = [
+        ("Spain", "8.50"), ("Italy", "8.50"), ("France", "8.50"),
+        ("Portugal", "8.50"), ("Germany", "8.50"), ("Ireland", "8.50"),
+        ("Netherlands", "8.50"), ("United Kingdom", "8.50"),
+        ("Canada", "9.00"), ("Greece", "10.00"), ("Mexico", "11.00"),
+        ("Australia", "12.00"), ("Brazil", "13.00"), ("Japan", "14.00"),
+        ("Thailand", "16.00"), ("United Arab Emirates", "22.00"),
+    ]
+    return [RoamingRate(destination=name, per_gb=D(rate))
+            for name, rate in rows]
 
 
 def build_customers() -> list[Customer]:
@@ -74,6 +98,8 @@ def build_customers() -> list[Customer]:
         ("CUST-010", "Oliver Grant", "NB-1010", "33101", 5, False),
         ("CUST-011", "Ruth Callaghan", "NB-1011", "55401", 34, False),
         ("CUST-012", "Felix Adeyemi", "NB-1012", "80202", 17, False),
+        ("CUST-013", "Nadia Hassan", "NB-1013", "10025", 14, False),
+        ("CUST-014", "Chris Novak", "NB-1014", "60607", 9, False),
     ]
     return [
         Customer(customer_id=cid, full_name=name, account_number=acct,
@@ -102,34 +128,60 @@ def _cycle_dates(account: Account) -> Account:
 def build_accounts() -> list[Account]:
     return [_cycle_dates(account) for account in [
         Account(account_number="NB-1001", customer_id="CUST-001", plan_id="PLAN-ESS",
-                balance_due=D("94.35"), payment_method_last4="4417", cycle_day=19),
+                balance_due=D("94.35"), payment_method_last4="4417", cycle_day=19,
+                typical_daily_data_gb=D("0.6")),
         Account(account_number="NB-1002", customer_id="CUST-002", plan_id="PLAN-UNL",
                 balance_due=D("152.52"), payment_method_last4="9034", cycle_day=19,
-                roaming_country="Spain", roaming_gb_used=D("31")),
+                roaming_country="Spain", roaming_gb_used=D("31"),
+                roaming_since="2026-09-25", typical_daily_data_gb=D("2.5")),
         Account(account_number="NB-1003", customer_id="CUST-003", plan_id="PLAN-FAM",
-                balance_due=D("118.60"), payment_method_last4="2210", cycle_day=11),
+                balance_due=D("118.60"), payment_method_last4="2210", cycle_day=11,
+                typical_daily_data_gb=D("1.8")),
         Account(account_number="NB-1004", customer_id="CUST-004", plan_id="PLAN-ESS",
-                balance_due=D("45.00"), payment_method_last4="7781", cycle_day=7),
+                balance_due=D("45.00"), payment_method_last4="7781", cycle_day=7,
+                typical_daily_data_gb=D("0.2")),
         Account(account_number="NB-1005", customer_id="CUST-005", plan_id="PLAN-ESS",
                 balance_due=D("76.77"), payment_method_last4="5150", cycle_day=14,
+                typical_daily_data_gb=D("0.7"),
                 # The network-side line test finds a fault on Grace's
                 # line: her broadband procedure branches straight to
                 # a field visit, by the book.
                 diagnostics={"line_test": "fault_found"}),
         Account(account_number="NB-1006", customer_id="CUST-006", plan_id="PLAN-ESS",
-                balance_due=D("61.10"), payment_method_last4="6602", cycle_day=19),
+                balance_due=D("61.10"), payment_method_last4="6602", cycle_day=19,
+                typical_daily_data_gb=D("0.5")),
         Account(account_number="NB-1007", customer_id="CUST-007", plan_id="PLAN-ESS",
-                balance_due=D("45.00"), payment_method_last4="3098", cycle_day=5),
+                balance_due=D("45.00"), payment_method_last4="3098", cycle_day=5,
+                typical_daily_data_gb=D("0.9")),
         Account(account_number="NB-1008", customer_id="CUST-008", plan_id="PLAN-BAS",
-                balance_due=D("25.00"), payment_method_last4="8845", cycle_day=9),
+                balance_due=D("25.00"), payment_method_last4="8845", cycle_day=9,
+                typical_daily_data_gb=D("0.1")),
         Account(account_number="NB-1009", customer_id="CUST-009", plan_id="PLAN-UNL",
-                balance_due=D("75.00"), payment_method_last4="1173", cycle_day=22),
+                balance_due=D("75.00"), payment_method_last4="1173", cycle_day=22,
+                typical_daily_data_gb=D("1.2")),
         Account(account_number="NB-1010", customer_id="CUST-010", plan_id="PLAN-ESS",
-                balance_due=D("212.40"), payment_method_last4="4029", cycle_day=19),
+                balance_due=D("212.40"), payment_method_last4="4029", cycle_day=19,
+                typical_daily_data_gb=D("0.8")),
         Account(account_number="NB-1011", customer_id="CUST-011", plan_id="PLAN-ESS",
-                balance_due=D("72.61"), payment_method_last4="7305", cycle_day=19),
+                balance_due=D("72.61"), payment_method_last4="7305", cycle_day=19,
+                typical_daily_data_gb=D("0.4")),
         Account(account_number="NB-1012", customer_id="CUST-012", plan_id="PLAN-ESS",
-                balance_due=D("130.38"), payment_method_last4="2214", cycle_day=19),
+                balance_due=D("130.38"), payment_method_last4="2214", cycle_day=19,
+                typical_daily_data_gb=D("1.1")),
+        # Nadia is mid-trip in Greece, past the fair-use ceiling,
+        # and no fair-use warning exists anywhere on her record —
+        # the gap her roaming dispute will turn on.
+        Account(account_number="NB-1013", customer_id="CUST-013", plan_id="PLAN-ESS",
+                balance_due=D("92.40"), payment_method_last4="6631", cycle_day=19,
+                roaming_country="Greece", roaming_gb_used=D("28"),
+                roaming_since="2026-09-24", typical_daily_data_gb=D("1.6")),
+        # Chris roamed in Italy under a Roam Pass he activated
+        # before the trip (seeded on the action log below): his
+        # bill carries the per-GB overage the pass doesn't cover.
+        Account(account_number="NB-1014", customer_id="CUST-014", plan_id="PLAN-ESS",
+                balance_due=D("85.86"), payment_method_last4="9021", cycle_day=19,
+                roaming_country="Italy", roaming_gb_used=D("12"),
+                roaming_since="2026-09-20", typical_daily_data_gb=D("0.8")),
     ]]
 
 
@@ -203,6 +255,24 @@ def build_bills() -> list[Bill]:
             BillCharge(charge_id="CH-1012-3", kind="tax",
                        description="Taxes and regulatory fees", amount=D("7.38")),
         ]),
+        _bill("BILL-1013", "NB-1013", [
+            BillCharge(charge_id="CH-1013-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1013-2", kind="roaming",
+                       description="Roaming data — Greece (pay per GB)",
+                       amount=D("42.00")),
+            BillCharge(charge_id="CH-1013-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("5.40")),
+        ]),
+        _bill("BILL-1014", "NB-1014", [
+            BillCharge(charge_id="CH-1014-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1014-2", kind="roaming",
+                       description="Roaming data — Italy (pay per GB)",
+                       amount=D("36.00")),
+            BillCharge(charge_id="CH-1014-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("4.86")),
+        ]),
         # The previous cycle for every billed account — explanations
         # compare against these, and bill shock is measured against
         # the trailing average they form.
@@ -250,6 +320,18 @@ def build_bills() -> list[Bill]:
             BillCharge(charge_id="CH-1012P-2", kind="tax",
                        description="Taxes and regulatory fees", amount=D("3.71")),
         ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1013-PREV", "NB-1013", [
+            BillCharge(charge_id="CH-1013P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1013P-2", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("5.40")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1014-PREV", "NB-1014", [
+            BillCharge(charge_id="CH-1014P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1014P-2", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("4.86")),
+        ], cycle=_PREVIOUS_CYCLE),
     ]
 
 
@@ -288,6 +370,22 @@ def build_policies() -> list[PolicyDocument]:
          "additional data is charged per GB. The agent must tell a customer "
          "who is near or past the fair-use ceiling before recommending any "
          "further chargeable roaming product."),
+        ("POL-ROAM-03", "Roaming projections and warnings", "roaming",
+         "Before a trip, the agent prices both ways of paying from the "
+         "destination rate and the customer's typical daily use — "
+         "pay-as-you-go and the Roam Pass — and states both figures and "
+         "the saving before recommending either. When the projected "
+         "pay-as-you-go cost passes $50, the projection and the "
+         "comparison lead the conversation: no chargeable roaming "
+         "product is proposed until the customer has seen them. While "
+         "a customer roams, the agent warns as fair use runs out — a "
+         "summary at 80% of the ceiling and again at 100%, stating the "
+         "usage, the ceiling, and what continuing at the same pace is "
+         "projected to cost. A roaming charge disputed afterwards is "
+         "decided on the record: a charge covered by an active pass "
+         "stands, a charge the customer was warned about stands, and a "
+         "charge that passed the ceiling with no warning on record is "
+         "credited under the dispute policy."),
         ("POL-PLAN-01", "Changing your plan", "plans",
          "A plan change can start immediately or at the next cycle. An "
          "immediate change is prorated: the customer is credited for the "
@@ -453,11 +551,33 @@ def _seed_credit_history(store) -> None:
         ))
 
 
+def _seed_roaming_history(store) -> None:
+    """Executed roaming actions from before 'now' — the record a
+    roaming dispute reads. Chris Novak (NB-1014) activated the
+    Roam Pass on 2026-09-20, the day his Italy trip began, so the
+    pass window covers the roaming on his current bill."""
+    from .models import ActionKind, ActionRecord
+
+    store.save_action(ActionRecord(
+        action_id="ACT-HIST-1014-1",
+        conversation_id="CONV-HIST-1014",
+        kind=ActionKind.ACTIVATE_OFFER,
+        summary="activate the Roam Pass — 10 days for $30.00",
+        payload={"offer_id": "OFF-ROAM10"},
+        amount=D("30.00"),
+        basis="Customer requested the pass in conversation (POL-ROAM-01).",
+        status="executed",
+        account_number="NB-1014",
+        created_date="2026-09-20",
+    ))
+
+
 def seed_store(store) -> dict:
     """Write the whole book into a store and embed the policy corpus.
     Returns counts for readiness/demo output."""
     plans = build_plans()
     offers = build_offers()
+    rates = build_roaming_rates()
     customers = build_customers()
     accounts = build_accounts()
     bills = build_bills()
@@ -467,6 +587,8 @@ def seed_store(store) -> dict:
         store.save_plan(plan)
     for offer in offers:
         store.save_offer(offer)
+    for rate in rates:
+        store.save_roaming_rate(rate)
     for customer in customers:
         store.save_customer(customer)
     for account in accounts:
@@ -479,8 +601,10 @@ def seed_store(store) -> dict:
     for proc in procedures:
         store.save_procedure(proc)
     _seed_credit_history(store)
+    _seed_roaming_history(store)
     return {
         "plans": len(plans), "offers": len(offers), "customers": len(customers),
         "accounts": len(accounts), "bills": len(bills),
         "policies": len(policies), "procedures": len(procedures),
+        "roaming_rates": len(rates),
     }
