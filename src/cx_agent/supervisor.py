@@ -28,6 +28,7 @@ from langgraph.graph import END, StateGraph
 from . import actions as action_mod
 from . import billing_book
 from . import payments_book
+from . import retention_book
 from . import escalation as esc_mod
 from . import explanations as expl_mod
 from . import identity as id_mod
@@ -453,11 +454,36 @@ class Supervisor:
         state["next"] = "post"
         return state
 
+    def _retention_case_for(self, pending):
+        """The retention case a pending proposal belongs to, if
+        it belongs to one — the save offer and the governed
+        cancellation both carry their case id in the payload."""
+        if pending is None:
+            return None
+        case_id = pending.payload.get("retention_case_id")
+        if not case_id:
+            return None
+        return self.store.get_retention_case(case_id)
+
     # -- confirmation protocol ---------------------------------------------
     def _confirm(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
         pending = conv.pending_action
         verdict = classify_confirmation(text)
+        if pending.kind == ActionKind.CANCEL_ACCOUNT \
+                and pending.payload.get("retention_case_id") \
+                and retention_book.is_cancel_intent(text) \
+                and not any(w in text.lower() for w in (
+                    "don't cancel", "do not cancel", "not cancel",
+                    "keep my account", "stay with")):
+            # A customer who answers the cancellation proposal by
+            # saying "cancel" again is confirming it, not
+            # declining it: the closed confirmation vocabulary
+            # reads "cancel" as a decline of whatever pends, and
+            # here the thing pending IS the cancellation. Their
+            # second explicit ask completes it — no further
+            # retention steps (round 14).
+            verdict = "confirm"
         if verdict == "other":
             if not analyze(text).scores:
                 # No desk signal of any kind: this is not a new
@@ -507,6 +533,51 @@ class Supervisor:
                 # the booking was offered and declined, on record.
                 procedures.settle_callback(self.store, callback_id,
                                            "declined")
+            retention_case = self._retention_case_for(pending)
+            if retention_case is not None \
+                    and pending.payload.get("retention_save_offer"):
+                # Declining the save offer moves straight to
+                # completing the cancellation (round 14): the
+                # offer is recorded declined, never repeated or
+                # replaced, and the governed cancellation is
+                # proposed in this same reply for its own
+                # confirmation. A no-offers instruction in the
+                # decline is recorded on the case too.
+                if retention_book.no_offers_requested(text):
+                    retention_case.no_offers_requested = True
+                retention_book.mark_offer_declined(
+                    self.store, conv, retention_case)
+                acct = (self.store.get_account(conv.account_number)
+                        if conv.account_number else None)
+                if acct is not None:
+                    proposal = retention_book.cancellation_proposal(
+                        conv, retention_case, acct)
+                    cancel_record = action_mod.new_action_record(
+                        conv, proposal)
+                    self.store.save_action(cancel_record)
+                    conv.pending_action = proposal
+                    conv.specialist_state["pending_desk"] = \
+                        conv.specialist_state.get("desk", "offers")
+                    retention_book.note_cancellation_proposed(
+                        self.store, conv, retention_case,
+                        cancel_record.action_id)
+                    effective = proposal.payload["effective_date"]
+                    state["result"] = SpecialistResult(
+                        specialist="supervisor",
+                        findings=[Finding(
+                            topic="retention_declined",
+                            text=("Understood — that's the end of "
+                                  "retention: I won't offer anything "
+                                  "else. Here is the cancellation "
+                                  "itself, exactly as you asked."))],
+                        proposed_action=proposal,
+                        must_include=[
+                            f"Your account stays active and paid-up "
+                            f"until {effective}, when the "
+                            f"cancellation takes effect."],
+                        progress=True)
+                    state["next"] = "post"
+                    return state
             conv.pending_action = None
             conv.specialist_state.pop("pending_desk", None)
             state["action_record"] = record
@@ -542,6 +613,29 @@ class Supervisor:
             return state
         record = action_mod.execute(self.store, conv, pending, self.policy,
                                     confirmed=True)
+        retention_case = self._retention_case_for(pending)
+        if retention_case is not None and record.status == "executed":
+            # The retention case settles on its action's outcome
+            # (round 14): an executed save offer saves the case;
+            # an executed cancellation closes it as cancelled,
+            # with the cycle-boundary date the account now
+            # carries.
+            if pending.kind == ActionKind.CANCEL_ACCOUNT:
+                retention_book.mark_cancelled(
+                    self.store, conv, retention_case, record.action_id,
+                    record.payload.get("cancellation_effective")
+                    or pending.payload.get("effective_date", ""))
+            elif pending.payload.get("retention_save_offer"):
+                retention_book.mark_saved(
+                    self.store, conv, retention_case, record.action_id)
+        elif retention_case is not None and record.status == "blocked" \
+                and pending.payload.get("retention_save_offer") \
+                and record.block_reason != "stale_proposal":
+            # A stale save offer is not a refusal of the case: the
+            # stale branch below re-quotes it. Any other block
+            # settles the offer as blocked on the case record.
+            retention_book.mark_offer_blocked(
+                self.store, conv, retention_case, record.block_reason)
         if record.status == "blocked" \
                 and record.block_reason == "stale_proposal" \
                 and pending.kind == ActionKind.CHANGE_PLAN:
@@ -566,6 +660,11 @@ class Supervisor:
                 self.store.save_action(fresh_record)
                 conv.pending_action = fresh.proposed_action
                 conv.specialist_state["pending_desk"] = "offers"
+                fresh_case = self._retention_case_for(fresh.proposed_action)
+                if fresh_case is not None:
+                    retention_book.mark_offer_proposed(
+                        self.store, conv, fresh_case,
+                        fresh_record.action_id)
             state["action_record"] = record
             state["result"] = fresh
             state["next"] = "post"
@@ -620,7 +719,18 @@ class Supervisor:
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
         state["action_record"] = record
-        if record.status == "executed":
+        if record.status == "executed" \
+                and pending.kind == ActionKind.CANCEL_ACCOUNT:
+            # A cancellation's completion is stated from its own
+            # record: the date it takes effect, not a next bill
+            # the customer will no longer have.
+            effective = (record.payload.get("cancellation_effective")
+                         or pending.payload.get("effective_date", ""))
+            text_out = (f"Done — {pending.summary}. Your account "
+                        f"stays active until {effective}, and the "
+                        "cancellation is recorded on your account.")
+            resolved = True
+        elif record.status == "executed":
             text_out = (f"Done — {pending.summary}. It's recorded on your "
                         "account, and you'll see it on your next bill.")
             resolved = True
@@ -891,6 +1001,20 @@ class Supervisor:
             conv.pending_action = result.proposed_action
             conv.specialist_state["pending_desk"] = conv.intent.value
             state["action_record"] = record
+            retention_case = self._retention_case_for(result.proposed_action)
+            if retention_case is not None:
+                # The case record names the exact proposals made
+                # under it (round 14): the save offer's action id
+                # when the offer is proposed, the cancellation's
+                # when the cancellation is.
+                if result.proposed_action.payload.get(
+                        "retention_save_offer"):
+                    retention_book.mark_offer_proposed(
+                        self.store, conv, retention_case, record.action_id)
+                elif result.proposed_action.kind == \
+                        ActionKind.CANCEL_ACCOUNT:
+                    retention_book.note_cancellation_proposed(
+                        self.store, conv, retention_case, record.action_id)
 
         self._bookkeep_progress(conv, result)
         if result.resolved:

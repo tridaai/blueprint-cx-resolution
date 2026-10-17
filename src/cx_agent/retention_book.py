@@ -99,6 +99,7 @@ _REASON_CLASSES: list[tuple[str, list[str]]] = [
     ("service_quality", [
         "service quality", "poor service", "bad service",
         "terrible service", "awful service", "service is poor",
+        "service is broken", "service is terrible",
         "unreliable", "let down", "fed up", "customer service",
     ]),
     ("no_longer_needed", [
@@ -245,6 +246,33 @@ def mark_escalated_fault(store, conv: Conversation,
     _audit(store, conv, {
         "event": "retention_escalated", "case_id": case.case_id,
         "routed": case.routed, "reason": case.reason})
+    return _touch(store, case)
+
+
+def mark_offer_proposed(store, conv: Conversation,
+                        case: RetentionCase, action_id: str) -> RetentionCase:
+    """The assembled offer became a recorded proposal: its
+    action id lands on the case, so the record names the exact
+    proposal the customer is answering."""
+    case.save_offer_action_id = action_id
+    case.save_offer_outcome = "proposed"
+    case.state = "offer_proposed"
+    _audit(store, conv, {
+        "event": "retention_offer_proposed", "case_id": case.case_id,
+        "action_id": action_id, "mechanism": case.save_offer_mechanism})
+    return _touch(store, case)
+
+
+def note_cancellation_proposed(store, conv: Conversation,
+                               case: RetentionCase,
+                               action_id: str) -> RetentionCase:
+    """The governed cancellation was proposed: the case carries
+    the proposal's action id until the customer's answer settles
+    it (executed → mark_cancelled)."""
+    case.cancellation_action_id = action_id
+    _audit(store, conv, {
+        "event": "retention_cancellation_proposed",
+        "case_id": case.case_id, "action_id": action_id})
     return _touch(store, case)
 
 

@@ -46,6 +46,15 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("better plan", 3), ("unlimited max", 2), ("downgrade", 3),
         ("cheaper plan", 3), ("undo", 3), ("change back", 3),
         ("revert", 3), ("reverse", 2),
+        # Leaving is the offers desk's retention flow (round 14):
+        # the case, the one save offer and the governed
+        # cancellation all live there. Bare "cancel" scores below
+        # the account desk's "autopay", so cancelling autopay
+        # still belongs to payments.
+        ("cancel my account", 5), ("close my account", 5),
+        ("cancel my service", 5), ("cancel my contract", 5),
+        ("cancel my plan", 4), ("leave northbeam", 5),
+        ("want to leave", 4), ("cancel", 3),
     ],
     Intent.TECHNICAL: [
         ("no signal", 4), ("no service", 4), ("signal", 2),
@@ -148,7 +157,7 @@ READINGS: dict[Intent, str] = {
 _ANSWER_WORDS: dict[Intent, list[str]] = {
     Intent.BILLING: ["bill", "charge", "invoice", "refund"],
     Intent.ROAMING: ["roam", "abroad", "travel", "trip", "holiday"],
-    Intent.OFFERS: ["plan", "offer", "upgrade", "deal"],
+    Intent.OFFERS: ["plan", "offer", "upgrade", "deal", "cancel", "leave"],
     Intent.TECHNICAL: ["signal", "fault", "service", "internet",
                         "connection", "phone"],
     Intent.ACCOUNT: ["pay", "card", "payment", "debit"],

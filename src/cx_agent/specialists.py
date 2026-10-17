@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
-from . import care_book, payments_book, roaming_book
+from . import care_book, payments_book, retention_book, roaming_book
 from . import explanations as expl_mod
 from .routing import analyze, classify_confirmation
 from .billing_book import (
@@ -926,6 +926,102 @@ def _reversal_result(conv: Conversation, ctx: Ctx,
         citations=citations, must_include=must_include, progress=True)
 
 
+def _retention_result(conv: Conversation, ctx: Ctx, text: str,
+                      account) -> SpecialistResult:
+    """The retention flow (round 14; the rules live in
+    retention_book): open the case, then — in order — route a
+    fault-blamed exit to billing, honour a no-offers instruction
+    or a second cancel request by going straight to the governed
+    cancellation, assemble the ONE policy-bound save offer, or,
+    when no real mechanism answers the reason, say so and
+    propose the cancellation."""
+    citations = _cite(ctx, "plans",
+                      "cancel one save offer end of cycle retention")
+    case = retention_book.open_case_for(ctx.store, conv.conversation_id)
+    if case is not None:
+        case = retention_book.note_cancel_request(
+            ctx.store, conv, case, text)
+    else:
+        case = retention_book.open_case(
+            ctx.store, conv, text, account.account_number)
+    ref_line = f"Your retention case reference is {case.case_id}."
+    reason_words = case.reason.replace("_", " ")
+
+    if _fault_cited(text.lower()):
+        # A fault-blamed exit follows the existing billing
+        # dispute path (R5 behaviour), and the case records it.
+        retention_book.mark_escalated_fault(ctx.store, conv, case)
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(
+                topic="fault_handoff",
+                text=("Leaving because of a fault is the billing "
+                      "team's case, not a plan change — they own "
+                      "fault cancellations under the dispute policy, "
+                      "so the fault and the charges get looked at "
+                      "together. I'm passing this to them now with "
+                      f"what you've described attached. {ref_line} "
+                      "The case records that this went to the "
+                      "billing team."))],
+            citations=citations, must_include=[ref_line], progress=True,
+            escalate_reason="fault_cancellation_dispute_path",
+            escalate_queue="billing")
+
+    def cancellation(intro: str) -> SpecialistResult:
+        proposal = retention_book.cancellation_proposal(conv, case, account)
+        effective = proposal.payload["effective_date"]
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(topic="retention_cancellation", text=intro)],
+            proposed_action=proposal, citations=citations,
+            must_include=[
+                ref_line,
+                f"Your account stays active and paid-up until "
+                f"{effective}, when the cancellation takes effect."],
+            progress=True)
+
+    if case.no_offers_requested:
+        return cancellation(
+            f"I've recorded that you want to cancel — and that you "
+            f"don't want any offers, so I won't make one. {ref_line} "
+            "Here's the cancellation itself, and it's the last "
+            "step: it takes effect at the end of this cycle, so "
+            "you keep everything you've paid for until then.")
+    if case.cancel_requests >= 2:
+        return cancellation(
+            f"You've asked again, so I'll stop there — no more "
+            f"retention steps. {ref_line} Here's the cancellation "
+            "itself: it takes effect at the end of this cycle, so "
+            "you keep everything you've paid for until then.")
+    offer = retention_book.assemble_save_offer(
+        ctx.store, conv, case, ctx.policy)
+    if offer is not None:
+        return SpecialistResult(
+            specialist="offers",
+            findings=[Finding(
+                topic="retention_case",
+                text=(f"I'm sorry to hear you want to leave — I've "
+                      f"opened a case and recorded the reason as "
+                      f"{reason_words}, in your own words. "
+                      f"{offer.intro}"))],
+            proposed_action=offer.proposal, citations=citations,
+            must_include=[ref_line] + offer.must_include, progress=True)
+    if case.reason == "moving_house":
+        intro = (f"I've recorded that you're leaving because "
+                 f"you're moving house. {ref_line} There's no offer "
+                 "in the book that honestly answers a move, so I "
+                 "won't invent one — here's the cancellation "
+                 "itself, effective at the end of this cycle.")
+    else:
+        intro = (f"I've recorded that you want to leave "
+                 f"({reason_words}). {ref_line} There's no save "
+                 "offer in the book I can honestly make on this "
+                 "account, so I won't invent one — here's the "
+                 "cancellation itself, effective at the end of "
+                 "this cycle.")
+    return cancellation(intro)
+
+
 def refresh_plan_change(conv: Conversation, ctx: Ctx,
                         pending) -> SpecialistResult:
     """Rebuild a plan-change proposal that execution refused as
@@ -960,6 +1056,15 @@ def refresh_plan_change(conv: Conversation, ctx: Ctx,
             return SpecialistResult(specialist="offers", findings=[lead],
                                     progress=True)
         fresh = _change_result(conv, ctx, account, target)
+    if pending.payload.get("retention_case_id") \
+            and fresh.proposed_action is not None:
+        # A re-quoted retention save offer is still the case's one
+        # offer: the fresh proposal carries the case with it, so
+        # accepting it settles the case and the single-counter
+        # check at execution still reads the same case.
+        fresh.proposed_action.payload["retention_case_id"] = \
+            pending.payload["retention_case_id"]
+        fresh.proposed_action.payload["retention_save_offer"] = True
     fresh.findings = [lead] + fresh.findings
     return fresh
 
@@ -978,6 +1083,16 @@ def offers(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                 citations=[d["doc_id"] for d in docs],
                 progress=True, resolved=True)
     lowered = lowered0
+    # Wanting to leave is the retention flow (round 14): the case
+    # opens here, at the desk that owns plan changes and the
+    # mechanisms a save offer is built from.
+    if retention_book.is_cancel_intent(text):
+        if not conv.account_number:
+            return _needs_identity("offers", _IDENTITY_ASK)
+        account = _account(ctx, conv)
+        if account is None:
+            return _needs_identity("offers", _IDENTITY_ASK)
+        return _retention_result(conv, ctx, text, account)
     # "Undo that change" is its own transaction, not a new change:
     # it is priced off the change record, inside or outside the
     # reversal window — never off the catalogue.
