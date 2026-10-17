@@ -156,7 +156,7 @@ transactional desk on a guess.
 | roaming | account roaming state, rate table, usage profile, offer catalogue, fair-use notices | `activate_offer` (Roam Pass) |
 | offers | plan catalogue, loyalty offer, cycle calendar, change history | `change_plan` (and its reversal) |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
-| account | account record, balance, arrangement policy | `update_payment_method`, `payment_arrangement` |
+| account | account record, balance, attempt log, arrangements, processor double, autopay state | `update_payment_method`, `payment_arrangement`, `take_payment`, `refund_payment`, `set_autopay` |
 | care | policy corpus retrieval | — (answers, or logs an unhandled intent) |
 
 Dispute evidence is a property of the bill, computed in code:
@@ -217,6 +217,66 @@ the ceiling with neither on record makes the line evidenced,
 and it credits — or escalates above the dispute cap — through
 the same machinery as any bill-marked line. The dispute case
 records which evidence applied, line by line.
+
+## Payments depth
+
+A payment is an attempt on the record. The processor is a test
+double, as the one-time code is: it reads the method on file and
+answers approved, or declined with a reason code. Every run —
+manual or autopay — writes a `PaymentAttempt` carrying the
+amount, the method's last four, the code, and the class the code
+falls into, decided in `payments_book.py`: **soft** (insufficient
+funds, processor timeout — the card lives, and a retry can
+succeed once the cause is fixed) or **hard** (card expired, card
+reported lost, account closed — that method can never be charged
+again). The class decides the conversation: the desk reads the
+latest decline and gives that class's remedy, and a hard decline
+standing against the current method is refused twice — the desk
+will not propose the retry, and execution re-checks the attempt
+log at the moment of the attempt and blocks it
+(`hard_decline_retry_refused`) without the processor ever being
+reached. Replacing the card clears the standing decline: it was
+a fact about the old method, not about the customer. The
+supervisor composes the payment reply from the attempt record —
+paid, with the new balance, or the diagnosis — never from the
+generic action text.
+
+**Arrangements are records, not promises in prose.** Confirming
+one writes a `PaymentArrangement` whose schedule is computed in
+code under policy: at most three instalments, each at least the
+policy minimum (the count falls until every slice clears it),
+residue cents dealt to the earliest slices so the amounts sum
+to the balance exactly, the first due within the policy window
+and the rest monthly. No second arrangement opens while one is
+active — re-checked at execution, not just at proposal. An
+approved payment pours into the arrangement, earliest open
+slice first. The state is derived from the record and the
+calendar, never asserted: every slice covered is *completed*; a
+due date past with its slice short is *broken*; otherwise
+*active*. A broken arrangement is a human's case — the next
+contact at the account desk escalates to the care queue with
+the record attached (its id on the audit trail, its summary in
+the handoff) before any other business, and the agent does not
+renegotiate it.
+
+**Refunds go to source.** Money owed back lives on the account
+as a credit balance; a refund's amount is read from that record
+and its destination is the payment method on file, named in the
+proposal from the record. A destination the customer supplies —
+another card, a bank transfer, a cheque — is refused in the
+conversation with the fraud reason, and execution refuses it
+again against the live account (`refund_destination_not_on_file`),
+so no version of the request can move money anywhere else.
+
+**Autopay is state on the account**, changed only as a
+confirmed action, and its failures are proactive: the
+billing-side run writes its attempt like any other, and a
+decline raises a `PaymentNotice` whose summary — amount,
+method, date, reason, balance still due, the class's remedy —
+is composed from the computed figures, following the fair-use
+notice pattern. At the customer's next contact the notice leads
+the payments conversation, verbatim, and the diagnosis path
+opens from it.
 
 ## Plan-change transactions
 
@@ -366,7 +426,7 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 52 scripted
+The eval pack grades trajectories, not replies: 64 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
@@ -390,7 +450,16 @@ that schedules at the boundary and moves nothing, a proposal
 the world outruns — refused as stale, re-quoted, and only then
 executed — and a reversal inside its window restoring plan and
 money as a compensating pair, with the same request outside the
-window routed to the offers queue. The rubrics encode the
+window routed to the offers queue. Round 7 adds the payment
+trajectories: a soft decline diagnosed by class and retried to
+success after the fix, a hard decline whose same-card retry is
+refused in the conversation and never executes, an arrangement
+whose three instalments match the balance to the cent and whose
+second arrangement is refused, a missed instalment deriving the
+arrangement broken and routing the next contact to a human with
+the record, a refund refused to a customer-named bank account
+and executed to the card on file, and a failed autopay whose
+notice figures lead the next contact. The rubrics encode the
 production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
@@ -440,9 +509,9 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes rounds 1–5 (core; rerouting and
+This document describes rounds 1–7 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
-plan-change transactions). The scheduled deepening — the
+plan-change transactions; roaming depth; payments depth). The scheduled deepening — the
 retention flow, failure attribution and the annotation queue,
 conversation-signal extraction, the daily quality pass, the
 prompt registry, handoff scoring, cost budgets — is laid out in

@@ -135,9 +135,26 @@ open http://localhost:8000              # the operator console
   step — and exhausting the steps books a technician callback
   as a record carrying the whole step transcript, instead of
   improvising.
-- **Account & payments** — card replacement and payment
-  arrangements behind full identity verification; only the last
-  four digits of a card ever appear.
+- **Account & payments** — card replacement behind full
+  identity verification, and payments worked as records: every
+  charge attempt lands on a log with the processor's reason
+  code, and the code's class decides what happens next — a soft
+  decline (insufficient funds, a processor timeout) may be
+  retried once the cause is fixed, while a hard decline (an
+  expired or lost card, a closed account) is never retried, in
+  the conversation or at execution. Payment arrangements are
+  stored schedules — amounts and dates computed in code, the
+  total equal to the balance to the cent — that payments pour
+  into and the calendar marks completed or broken; a broken
+  arrangement goes to a human with its record attached.
+  Refunds go back to the payment method on file and nowhere
+  else — a destination the customer names is refused with the
+  fraud reason — and the amount is read from the account, never
+  from the conversation. Autopay is a confirmed setting on the
+  account; a failed automatic payment raises a notice carrying
+  its figures, which is the first thing the customer hears
+  about at their next contact. Only the last four digits of a
+  card ever appear.
 - **Customer care** — the catch-all desk for legitimate needs
   outside the five, answering from the policy corpus with
   citations; a need it cannot serve is logged as an unhandled
@@ -245,7 +262,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (58 trajectories) + run_evals.py
+evals/             scenarios.jsonl (64 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```
