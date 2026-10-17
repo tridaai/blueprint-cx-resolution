@@ -82,6 +82,12 @@
     <div id="callbacks"><p class="empty">No callbacks. When a guided procedure runs out of steps, the callback booked for the technician — with the full step transcript — lands here.</p></div>
     <h2 style="margin-top:22px">Roaming fair-use notices</h2>
     <div id="notices"><p class="empty">No fair-use notices. When a roaming customer crosses 80% or 100% of the fair-use ceiling, the proactive warning — figures and all — lands here.</p></div>
+    <h2 style="margin-top:22px">Payment arrangements</h2>
+    <div id="arrangements"><p class="empty">No payment arrangements. When a customer splits a balance, the arrangement — amounts, dates, and the state the calendar derives — lands here.</p></div>
+    <h2 style="margin-top:22px">Payment attempts</h2>
+    <div id="attempts"><p class="empty">No payment attempts. Every charge run against a card on file — approved, or declined with its reason and class — lands here.</p></div>
+    <h2 style="margin-top:22px">Payment notices</h2>
+    <div id="payment-notices"><p class="empty">No payment notices. When an automatic payment fails, the notice carrying its figures — the summary the customer is shown at their next contact — lands here.</p></div>
   </section>
 </main>
 <footer>
@@ -256,6 +262,59 @@ async function refresh() {
         (n.unwarned_crossing ? '<div class="k">Policy event</div><div>crossed 100% with no earlier warning on record</div>' : "") +
         '<div class="k">Summary shown</div><div>' + n.summary + "</div>";
       nbox.appendChild(div);
+    }
+  }
+  const arr = await api("/payments/arrangements");
+  const abox = document.getElementById("arrangements");
+  if (!arr.arrangements.length) {
+    abox.innerHTML = '<p class="empty">No payment arrangements. When a customer splits a balance, the arrangement — amounts, dates, and the state the calendar derives — lands here.</p>';
+  } else {
+    abox.innerHTML = "";
+    for (const a of arr.arrangements) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const slices = a.installments.map(i =>
+        "<li>#" + i.number + " — $" + i.amount + " due " + i.due_date +
+        (i.paid_date ? " · paid " + i.paid_date : " · $" + i.paid_amount + " paid") + "</li>").join("");
+      div.innerHTML = "<h3>" + a.arrangement_id + " — " + a.state + "</h3>" +
+        '<div class="k">Account · total · opened</div><div>' + a.account_number +
+        " · $" + a.total + " · " + a.created_date + "</div>" +
+        '<div class="k">Instalments</div><ul>' + slices + "</ul>";
+      abox.appendChild(div);
+    }
+  }
+  const att = await api("/payments/attempts");
+  const tbox = document.getElementById("attempts");
+  if (!att.attempts.length) {
+    tbox.innerHTML = '<p class="empty">No payment attempts. Every charge run against a card on file — approved, or declined with its reason and class — lands here.</p>';
+  } else {
+    tbox.innerHTML = "";
+    for (const t of att.attempts) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>" + t.attempt_id + " — " + t.outcome + "</h3>" +
+        '<div class="k">Account · method · amount · source</div><div>' + t.account_number +
+        " · card ending " + (t.method_last4 || "—") + " · $" + t.amount + " · " + t.source + "</div>" +
+        (t.reason_code ? '<div class="k">Decline</div><div>' + t.reason_code +
+          " (" + t.decline_class + ")</div>" : "") +
+        '<div class="k">Date</div><div>' + t.created_date + "</div>";
+      tbox.appendChild(div);
+    }
+  }
+  const pnt = await api("/payments/notices");
+  const pbox = document.getElementById("payment-notices");
+  if (!pnt.notices.length) {
+    pbox.innerHTML = '<p class="empty">No payment notices. When an automatic payment fails, the notice carrying its figures — the summary the customer is shown at their next contact — lands here.</p>';
+  } else {
+    pbox.innerHTML = "";
+    for (const n of pnt.notices) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>" + n.notice_id + " — " + n.kind.replace("_", " ") + "</h3>" +
+        '<div class="k">Account · method · amount · raised</div><div>' + n.account_number +
+        " · card ending " + (n.method_last4 || "—") + " · $" + n.amount + " · " + n.created_date + "</div>" +
+        '<div class="k">Summary shown</div><div>' + n.summary + "</div>";
+      pbox.appendChild(div);
     }
   }
 }

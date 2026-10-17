@@ -185,6 +185,24 @@ def list_roaming_notices(account_number: str | None = None) -> dict:
                         service.list_roaming_notices(account_number)]}
 
 
+@app.get("/payments/attempts", dependencies=[Depends(require_key)])
+def list_payment_attempts(account_number: str | None = None) -> dict:
+    return {"attempts": [t.model_dump(mode="json") for t in
+                         service.list_payment_attempts(account_number)]}
+
+
+@app.get("/payments/arrangements", dependencies=[Depends(require_key)])
+def list_payment_arrangements(account_number: str | None = None) -> dict:
+    return {"arrangements": [a.model_dump(mode="json") for a in
+                             service.list_payment_arrangements(account_number)]}
+
+
+@app.get("/payments/notices", dependencies=[Depends(require_key)])
+def list_payment_notices(account_number: str | None = None) -> dict:
+    return {"notices": [n.model_dump(mode="json") for n in
+                        service.list_payment_notices(account_number)]}
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")

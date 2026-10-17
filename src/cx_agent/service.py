@@ -72,6 +72,15 @@ class ConversationService:
     def list_roaming_notices(self, account_number: str | None = None):
         return self.store.list_roaming_notices(account_number)
 
+    def list_payment_attempts(self, account_number: str | None = None):
+        return self.store.list_payment_attempts(account_number)
+
+    def list_payment_arrangements(self, account_number: str | None = None):
+        return self.store.list_payment_arrangements(account_number)
+
+    def list_payment_notices(self, account_number: str | None = None):
+        return self.store.list_payment_notices(account_number)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)
