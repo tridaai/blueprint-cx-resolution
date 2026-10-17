@@ -15,6 +15,15 @@
     cx-agent daily-quality   run the daily quality pass and print
         [--date YYYY-MM-DD]  its digest (default date: today)
     cx-agent quality-trend   headline metrics across stored digests
+    cx-agent prompts         the prompt registry's active set
+    cx-agent prompt-lint     lint the active registry (figures,
+                             promises, side channels, composition)
+    cx-agent prompt-add      add a version of a registry entry:
+        <prompt-id> <file>   its text read from the file
+    cx-agent prompt-rollback pin an older version active again:
+        <prompt-id> <version>
+    cx-agent prompt-unpin    lift an entry's pin:
+        <prompt-id>
 """
 
 from __future__ import annotations
@@ -134,6 +143,84 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         digest = service.run_daily_quality(on)
         print(quality.render_digest_markdown(digest))
+        return 0
+    if cmd == "prompts":
+        rows = service.list_prompts()
+        if not rows:
+            print("The prompt registry is empty — run cx-agent seed first.")
+            return 0
+        for row in rows:
+            pin = (f"  pinned v{row['pinned_version']}"
+                   if row["pinned_version"] else "")
+            print(f"{row['prompt_id']:<28} {row['surface']:<12} "
+                  f"active v{row['active_version']} "
+                  f"({row['versions']} version(s)){pin}")
+        return 0
+    if cmd == "prompt-lint":
+        from .promptlint import PromptLintError, lint_store
+        from .prompts import PromptRegistryError
+
+        if not service.prompts.known_ids():
+            print("prompt lint: the registry is empty — "
+                  "run cx-agent seed first", file=sys.stderr)
+            return 2
+        try:
+            findings = lint_store(service.store, service.policy)
+        except PromptRegistryError as exc:
+            print(f"prompt lint: {exc}", file=sys.stderr)
+            return 2
+        if findings:
+            for finding in findings:
+                print(str(finding))
+            print(f"prompt lint: {len(findings)} finding(s) — "
+                  f"the registry does not pass")
+            return 1
+        print(f"prompt lint: OK — {len(service.prompts.known_ids())} "
+              f"active entries, no findings")
+        return 0
+    if cmd in ("prompt-add", "prompt-rollback", "prompt-unpin"):
+        from .promptlint import PromptLintError
+        from .prompts import PromptRegistryError
+
+        try:
+            if cmd == "prompt-add":
+                if len(argv) < 3:
+                    print("usage: cx-agent prompt-add <prompt-id> <file>",
+                          file=sys.stderr)
+                    return 2
+                with open(argv[2], encoding="utf-8") as fh:
+                    text = fh.read()
+                entry = service.add_prompt_version(
+                    argv[1], text, actor="cli")
+                print(f"{entry.prompt_id}: v{entry.version} added and "
+                      f"active (unless pinned)")
+            elif cmd == "prompt-rollback":
+                if len(argv) < 3:
+                    print("usage: cx-agent prompt-rollback "
+                          "<prompt-id> <version>", file=sys.stderr)
+                    return 2
+                pin = service.rollback_prompt(
+                    argv[1], int(argv[2]), actor="cli")
+                print(f"{pin.prompt_id}: rolled back — v{pin.version} "
+                      f"is active (pinned)")
+            else:
+                if len(argv) < 2:
+                    print("usage: cx-agent prompt-unpin <prompt-id>",
+                          file=sys.stderr)
+                    return 2
+                service.unpin_prompt(argv[1], actor="cli")
+                detail = service.get_prompt(argv[1])
+                print(f"{argv[1]}: unpinned — v{detail['active_version']} "
+                      f"is active")
+        except PromptLintError as exc:
+            for finding in exc.findings:
+                print(str(finding), file=sys.stderr)
+            print("the act was refused by the lint gate; nothing "
+                  "was written", file=sys.stderr)
+            return 1
+        except (PromptRegistryError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         return 0
     if cmd == "quality-trend":
         rows = service.quality_trend()

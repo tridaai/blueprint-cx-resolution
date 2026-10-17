@@ -12,6 +12,7 @@ import logging
 import uuid
 
 from . import attribution, care_book, mining, signals
+from . import prompts as prompts_mod
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import LiveLLM, make_llm
@@ -246,6 +247,79 @@ class ConversationService:
         from . import quality
 
         return quality.quality_trend(self.store)
+
+    # -- the prompt registry (round 13) -----------------------------
+
+    def list_prompts(self) -> list[dict]:
+        """The registry's active set: one row per governed text —
+        its surface, its active version, how many versions exist,
+        and the pin standing on it, if any."""
+        rows = []
+        for entry in self.prompts.active_entries():
+            pin = self.prompts.pin(entry.prompt_id)
+            rows.append({
+                "prompt_id": entry.prompt_id,
+                "surface": entry.surface,
+                "active_version": entry.version,
+                "versions": len(self.prompts.versions(entry.prompt_id)),
+                "pinned_version": pin.version if pin else None,
+            })
+        return rows
+
+    def get_prompt(self, prompt_id: str) -> dict | None:
+        """One entry in full: every version (old versions stay
+        readable forever), the pin, and the act log for it."""
+        versions = self.prompts.versions(prompt_id)
+        if not versions:
+            return None
+        pin = self.prompts.pin(prompt_id)
+        return {
+            "prompt_id": prompt_id,
+            "surface": versions[-1].surface,
+            "active_version": self.prompts.active_version(prompt_id),
+            "pinned_version": pin.version if pin else None,
+            "versions": [e.model_dump(mode="json") for e in versions],
+            "acts": [a.model_dump(mode="json")
+                     for a in self.store.list_prompt_acts(prompt_id)],
+        }
+
+    def add_prompt_version(self, prompt_id: str, text: str,
+                           actor: str = "", note: str = ""):
+        """Add a version of an entry. The lint gates activation;
+        a refusal raises PromptLintError and writes nothing."""
+        return prompts_mod.add_version(
+            self.store, self.policy, prompt_id, text, actor, note)
+
+    def rollback_prompt(self, prompt_id: str, version: int,
+                        actor: str = "", note: str = ""):
+        """Roll an entry back: pin an older version active. The
+        newer versions stay on the books."""
+        return prompts_mod.rollback(
+            self.store, self.policy, prompt_id, version, actor, note)
+
+    def unpin_prompt(self, prompt_id: str, actor: str = "",
+                     note: str = ""):
+        """Lift a pin: the highest version activates again."""
+        return prompts_mod.unpin(
+            self.store, self.policy, prompt_id, actor, note)
+
+    def conversation_prompts(self, conversation_id: str):
+        """The exact registry texts that served one conversation,
+        at the versions recorded on it — the trace from a
+        historical reply to the words behind it. None when the
+        conversation does not exist."""
+        conv = self.store.get_conversation(conversation_id)
+        if conv is None:
+            return None
+        rows = []
+        for pid, version in sorted(conv.prompt_versions.items()):
+            entry = self.prompts.entry_at(pid, version)
+            rows.append({
+                "prompt_id": pid, "version": version,
+                "surface": entry.surface if entry else "",
+                "text": entry.text if entry else "",
+            })
+        return rows
 
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:

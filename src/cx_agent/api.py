@@ -60,6 +60,23 @@ class AnnotationIn(BaseModel):
     is_verdict: bool = False
 
 
+class PromptVersionIn(BaseModel):
+    text: str
+    actor: str = ""
+    note: str = ""
+
+
+class PromptRollbackIn(BaseModel):
+    version: int
+    actor: str = ""
+    note: str = ""
+
+
+class PromptUnpinIn(BaseModel):
+    actor: str = ""
+    note: str = ""
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -403,6 +420,91 @@ def get_digest_markdown(digest_date: str):
                                    "run the daily pass for it first")
     return PlainTextResponse(quality.render_digest_markdown(digest),
                              media_type="text/markdown")
+
+
+@app.get("/prompts", dependencies=[Depends(require_key)])
+def list_prompts() -> dict:
+    """The prompt registry's active set: every governed text at
+    its active version, with its pin if one stands."""
+    return {"prompts": service.list_prompts()}
+
+
+@app.get("/prompts/{prompt_id}", dependencies=[Depends(require_key)])
+def get_prompt(prompt_id: str) -> dict:
+    """One registry entry in full: all its versions (old versions
+    stay readable forever), its pin, and its act log."""
+    detail = service.get_prompt(prompt_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="no such prompt")
+    return detail
+
+
+def _prompt_act_or_http(fn, *args):
+    """Run a registry act, translating its refusals: an unknown
+    prompt is a 404 (checked by the caller), a lint refusal or a
+    registry defect is a 400 naming it — nothing was written."""
+    from .promptlint import PromptLintError
+    from .prompts import PromptRegistryError
+
+    try:
+        return fn(*args)
+    except PromptLintError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc),
+                    "findings": [str(f) for f in exc.findings]}) from exc
+    except PromptRegistryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/prompts/{prompt_id}/versions",
+          dependencies=[Depends(require_key)])
+def add_prompt_version(prompt_id: str, body: PromptVersionIn) -> dict:
+    """Add a version of a registry entry. The lint gates
+    activation: a text that would break it is refused, and the
+    refusal names the findings."""
+    if service.get_prompt(prompt_id) is None:
+        raise HTTPException(status_code=404, detail="no such prompt")
+    entry = _prompt_act_or_http(
+        service.add_prompt_version, prompt_id, body.text,
+        body.actor, body.note)
+    return entry.model_dump(mode="json")
+
+
+@app.post("/prompts/{prompt_id}/rollback",
+          dependencies=[Depends(require_key)])
+def rollback_prompt(prompt_id: str, body: PromptRollbackIn) -> dict:
+    """Roll an entry back: pin an older version active. The newer
+    versions stay on the books, readable forever."""
+    if service.get_prompt(prompt_id) is None:
+        raise HTTPException(status_code=404, detail="no such prompt")
+    pin = _prompt_act_or_http(
+        service.rollback_prompt, prompt_id, body.version,
+        body.actor, body.note)
+    return pin.model_dump(mode="json")
+
+
+@app.post("/prompts/{prompt_id}/unpin",
+          dependencies=[Depends(require_key)])
+def unpin_prompt(prompt_id: str, body: PromptUnpinIn) -> dict:
+    """Lift an entry's pin: the highest version activates again."""
+    if service.get_prompt(prompt_id) is None:
+        raise HTTPException(status_code=404, detail="no such prompt")
+    _prompt_act_or_http(
+        service.unpin_prompt, prompt_id, body.actor, body.note)
+    return service.get_prompt(prompt_id)
+
+
+@app.get("/conversations/{conversation_id}/prompts",
+         dependencies=[Depends(require_key)])
+def conversation_prompts(conversation_id: str) -> dict:
+    """The exact registry texts that served this conversation, at
+    the versions recorded on it — the trace from a historical
+    reply to the words behind it."""
+    rows = service.conversation_prompts(conversation_id)
+    if rows is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"conversation_id": conversation_id, "prompts": rows}
 
 
 @app.get("/signals/{conversation_id}", dependencies=[Depends(require_key)])
