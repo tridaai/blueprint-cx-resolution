@@ -27,6 +27,7 @@ from langgraph.graph import END, StateGraph
 
 from . import actions as action_mod
 from . import billing_book
+from . import payments_book
 from . import escalation as esc_mod
 from . import identity as id_mod
 from . import procedures
@@ -419,6 +420,29 @@ class Supervisor:
                     self.store, conv, case_id, "blocked", None,
                     note=(f"The credit was stopped at execution "
                           f"({record.block_reason}); nothing was applied."))
+        if pending.kind == ActionKind.TAKE_PAYMENT:
+            # A payment's outcome is the attempt's outcome: the
+            # reply is composed from the attempt record (paid, or
+            # the diagnosis for the decline's class), never from
+            # the generic action text — "Done" would be a lie about
+            # a decline. Either way the next turn belongs to the
+            # account desk: a soft decline may be retried there, a
+            # hard one starts the new-card path there.
+            text_out, resolved = payments_book.payment_outcome_text(
+                self.store, record)
+            conv.specialist_state["force_intent"] = "account"
+            if record.payload.get("decline_class") == "soft":
+                conv.specialist_state.setdefault("account", {})[
+                    "await_retry"] = True
+            conv.pending_action = None
+            conv.specialist_state.pop("pending_desk", None)
+            state["action_record"] = record
+            state["result"] = SpecialistResult(
+                specialist="supervisor",
+                findings=[Finding(topic="payment_outcome", text=text_out)],
+                progress=True, resolved=resolved)
+            state["next"] = "post"
+            return state
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
         state["action_record"] = record

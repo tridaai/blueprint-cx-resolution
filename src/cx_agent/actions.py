@@ -22,7 +22,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from . import plan_changes
+from . import payments_book, plan_changes
 from .clock import today
 from .config import Policy
 from .identity import is_verified
@@ -30,8 +30,10 @@ from .models import (
     CONSEQUENTIAL_ACTIONS,
     ActionKind,
     ActionRecord,
+    ArrangementInstallment,
     AuditEvent,
     Conversation,
+    PaymentArrangement,
     ProposedAction,
 )
 
@@ -162,16 +164,101 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
         if account is None or len(last4) != 4 or not last4.isdigit():
             return blocked("bad_card_last4")
         account.payment_method_last4 = last4
+        # A new method has no history: the decline standing
+        # against the old card was a fact about that card.
+        account.processor_code = ""
+        store.save_account(account)
+
+    elif proposal.kind == ActionKind.TAKE_PAYMENT:
+        if account is None:
+            return blocked("no_account")
+        amount = (proposal.amount if proposal.amount is not None
+                  else Decimal(str(proposal.payload.get("amount", "0"))))
+        if amount <= 0 or account.balance_due <= 0:
+            return blocked("nothing_to_pay")
+        # The hard-decline rule is re-checked here, at the moment
+        # of the attempt — a method the processor has declared
+        # dead is never run again, whatever was proposed.
+        if payments_book.hard_decline_block(store, account) is not None:
+            return blocked("hard_decline_retry_refused")
+        attempt = payments_book.process_payment(
+            store, account, amount, source="manual",
+            conversation_id=conv.conversation_id,
+            action_id=record.action_id)
+        record.payload = {**proposal.payload,
+                          "outcome": attempt.outcome,
+                          "reason_code": attempt.reason_code,
+                          "decline_class": attempt.decline_class,
+                          "attempt_id": attempt.attempt_id}
+        if attempt.outcome != "approved":
+            return blocked(f"payment_declined_{attempt.reason_code}")
+        account.balance_due = max(Decimal("0"),
+                                  account.balance_due - amount)
+        store.save_account(account)
+        # An approved payment pours into the active arrangement,
+        # like any money in: earliest open slice first.
+        payments_book.apply_payment(store, account.account_number, amount)
+
+    elif proposal.kind == ActionKind.REFUND_PAYMENT:
+        if account is None:
+            return blocked("no_account")
+        # Refunds go to the method on the record, and nowhere
+        # else — re-checked here against the live account, so a
+        # proposal naming any other destination can never run.
+        destination = str(proposal.payload.get("method_last4", ""))
+        if not payments_book.refund_destination_allowed(account, destination):
+            return blocked("refund_destination_not_on_file")
+        amount = (proposal.amount if proposal.amount is not None
+                  else Decimal(str(proposal.payload.get("amount", "0"))))
+        if amount <= 0 or account.credit_balance < amount:
+            return blocked("no_credit_balance")
+        account.credit_balance -= amount
+        store.save_account(account)
+
+    elif proposal.kind == ActionKind.SET_AUTOPAY:
+        if account is None:
+            return blocked("no_account")
+        enabled = bool(proposal.payload.get("enabled"))
+        if enabled and not account.payment_method_last4:
+            return blocked("no_payment_method_on_file")
+        account.autopay_enabled = enabled
         store.save_account(account)
 
     elif proposal.kind == ActionKind.PAYMENT_ARRANGEMENT:
         if account is None:
             return blocked("no_account")
-        if account.balance_due < Decimal("100"):
+        if account.balance_due < policy.arrangement_min_balance:
             return blocked("balance_below_arrangement_minimum")
-        account.open_case = (
-            f"arrangement:{proposal.payload.get('instalments')}x"
-            f"{proposal.payload.get('each')}")
+        # One arrangement at a time, and a broken one is a
+        # human's case: neither may be written over here.
+        if payments_book.broken_arrangement(store,
+                                            account.account_number):
+            return blocked("arrangement_broken_human_only")
+        if payments_book.active_arrangement(store,
+                                            account.account_number):
+            return blocked("arrangement_already_active")
+        spec = proposal.payload.get("installments")
+        if spec:
+            installments = [
+                ArrangementInstallment(
+                    number=int(s["number"]),
+                    amount=Decimal(str(s["amount"])),
+                    due_date=str(s["due_date"]))
+                for s in spec]
+        else:
+            installments = payments_book.plan_installments(
+                account.balance_due, policy)
+        arrangement = PaymentArrangement(
+            arrangement_id=f"ARR-{uuid.uuid4().hex[:10]}",
+            conversation_id=conv.conversation_id,
+            account_number=account.account_number,
+            total=sum((i.amount for i in installments), Decimal("0")),
+            installments=installments, state="active",
+            created_date=today().isoformat())
+        store.save_payment_arrangement(arrangement)
+        record.payload = {**proposal.payload,
+                          "arrangement_id": arrangement.arrangement_id}
+        account.open_case = f"arrangement:{arrangement.arrangement_id}"
         store.save_account(account)
 
     elif proposal.kind == ActionKind.BOOK_CALLBACK:
