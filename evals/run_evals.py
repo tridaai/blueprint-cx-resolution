@@ -55,7 +55,11 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # and transcript contents are never a matter of degree.
            "callbacks_count", "callback_status", "callback_transcript_steps",
            "run_state", "run_current_step", "run_history_steps",
-           "run_safety_refusals"}
+           "run_safety_refusals",
+           # Round 6: a quoted figure, the guard's ordering, and the
+           # fair-use record are never a matter of degree.
+           "reply_ordered", "roaming_notices_count", "notice_kinds",
+           "notice_unwarned", "dispute_evidence_includes"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -92,6 +96,14 @@ def check_turn(result, expect: dict, failures: list, label: str,
         elif key == "reply_not_contains":
             ok = want not in result.reply
             got = f"reply contains {want!r}"
+        elif key == "reply_ordered":
+            # Each fragment present, at strictly increasing
+            # positions — the projection really does lead.
+            positions = [result.reply.find(w) for w in want]
+            ok = all(p >= 0 for p in positions) and \
+                positions == sorted(positions) and \
+                len(set(positions)) == len(positions)
+            got = f"positions={positions}"
         elif key == "citations_include":
             ok = want in result.citations
             got = f"citations={result.citations}"
@@ -163,19 +175,31 @@ def check_final(service, scenario: dict, conv_id: str,
                                if run else []),
         "run_safety_refusals": run.safety_refusals if run else 0,
     }
+    if scenario.get("account"):
+        notices = store.list_roaming_notices(scenario["account"])
+        values["roaming_notices_count"] = len(notices)
+        values["notice_kinds"] = sorted(n.kind for n in notices)
+        values["notice_unwarned"] = any(n.unwarned_crossing for n in notices)
+    values["dispute_evidence"] = (" | ".join(
+        line.evidence for line in case.lines) if case else "")
     for key, want in final.items():
         total += 1
         is_zt = scenario_zt or key in ZT_KEYS
         if is_zt:
             zt_total += 1
-        ok = values.get(key) == want
+        if key == "dispute_evidence_includes":
+            ok = want in values["dispute_evidence"]
+            got = values["dispute_evidence"]
+        else:
+            ok = values.get(key) == want
+            got = values.get(key)
         if ok:
             passed += 1
             if is_zt:
                 zt_passed += 1
         else:
             failures.append(f"{label}: final expected {key}={want!r}, "
-                            f"got {values.get(key)!r}")
+                            f"got {got!r}")
     return passed, total, zt_passed, zt_total
 
 
@@ -197,7 +221,7 @@ def apply_poke(service, poke: dict) -> None:
         for key, value in poke.items():
             if key in ("account", "age_actions_days"):
                 continue
-            if key == "balance_due":
+            if key in ("balance_due", "roaming_gb_used"):
                 value = Decimal(str(value))
             setattr(account, key, value)
         store.save_account(account)
