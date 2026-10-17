@@ -721,6 +721,54 @@ class Escalation(BaseModel):
     turn: int
 
 
+class PromptEntry(BaseModel):
+    """One version of one governed text (round 13).
+
+    The registry's unit: every text the model is instructed by,
+    or that the agent serves to the customer as governed wording,
+    lives here as a versioned record — the compose instructions
+    the supervisor drafts under (surface `compose`), the router's
+    classification prompt (`intent`), the second explanation forms
+    (`explanation`), and the policy corpus documents themselves
+    (`policy`). Entries are keyed (`prompt_id`, `version`) and
+    never edited or deleted: a change is a new version, and the
+    active version is the highest unless an operator pins another
+    (see PromptPin). `prompts.py` owns the registry's rules."""
+
+    prompt_id: str  # compose.system | intent.user | explain.POL-ID-01 | policy.POL-BILL-01 | ...
+    version: int = 1
+    surface: str = ""  # compose | intent | explanation | policy
+    text: str = ""
+
+
+class PromptPin(BaseModel):
+    """An operator's pin on one registry entry: while a pin
+    stands, the pinned version is the active one, however many
+    newer versions exist. A rollback IS a pin (to an older
+    version); unpinning is its own recorded act."""
+
+    prompt_id: str
+    version: int
+    actor: str = ""
+    note: str = ""
+
+
+class PromptAct(BaseModel):
+    """One recorded act on the registry: a version added, a
+    rollback (pin), an unpin. Append-only, `seq` in store-wide
+    creation order like the annotation records, so the registry's
+    history reads the same on every store."""
+
+    act_id: str
+    seq: int = 0
+    kind: str = ""  # add_version | rollback | unpin
+    prompt_id: str = ""
+    version: int = 0  # the version the act concerns (0 for unpin)
+    actor: str = ""
+    note: str = ""
+    created_date: str = ""  # ISO date
+
+
 class Conversation(BaseModel):
     conversation_id: str
     customer_id: str | None = None
@@ -737,6 +785,13 @@ class Conversation(BaseModel):
     no_progress_turns: int = 0
     turns: int = 0
     unhandled_intent: str | None = None  # care logged a need it cannot serve
+    # The prompt-registry versions that served this conversation
+    # (round 13): prompt_id -> version, accumulated turn by turn —
+    # the compose instructions in force, the intent prompt when a
+    # hint was taken, each policy document at the version cited,
+    # each second form at the version served. Historical replies
+    # can be traced to the exact texts that produced them.
+    prompt_versions: dict = Field(default_factory=dict)
 
 
 class TurnResult(BaseModel):

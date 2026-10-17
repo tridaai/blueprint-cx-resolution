@@ -63,6 +63,9 @@ from .models import (
     PolicyDocument,
     Procedure,
     ProcedureRun,
+    PromptAct,
+    PromptEntry,
+    PromptPin,
     RoamingNotice,
     RoamingRate,
     SignalRecord,
@@ -199,6 +202,19 @@ class Store(Protocol):
     def save_digest(self, d: DailyDigest) -> None: ...
     def get_digest(self, digest_date: str) -> DailyDigest | None: ...
     def list_digests(self) -> list[DailyDigest]: ...
+    # the prompt registry (round 13): versioned entries keyed like
+    # the procedures, an operator pin per entry, an act log
+    def save_prompt_entry(self, e: PromptEntry) -> None: ...
+    def get_prompt_version(self, prompt_id: str,
+                           version: int) -> PromptEntry | None: ...
+    def list_prompt_entries(self, prompt_id: str | None = None
+                            ) -> list[PromptEntry]: ...
+    def save_prompt_pin(self, p: PromptPin) -> None: ...
+    def get_prompt_pin(self, prompt_id: str) -> PromptPin | None: ...
+    def delete_prompt_pin(self, prompt_id: str) -> None: ...
+    def save_prompt_act(self, a: PromptAct) -> None: ...
+    def list_prompt_acts(self, prompt_id: str | None = None
+                         ) -> list[PromptAct]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
     def list_audit(self, conversation_id: str) -> list[AuditEvent]: ...
     def count_customers(self) -> int: ...
@@ -234,6 +250,9 @@ class InMemoryStore:
         self.annotations: dict[str, AnnotationRecord] = {}
         self.signal_records: dict[str, SignalRecord] = {}
         self.quality_digests: dict[str, DailyDigest] = {}
+        self.prompt_entries: dict[str, PromptEntry] = {}
+        self.prompt_pins: dict[str, PromptPin] = {}
+        self.prompt_acts: dict[str, PromptAct] = {}
         self.audit: list[AuditEvent] = []
 
     def _put(self, table: dict, key: str, model) -> None:
@@ -469,6 +488,37 @@ class InMemoryStore:
         return sorted(self._all(self.quality_digests),
                       key=lambda d: d.date)
 
+    # Prompt entries are versioned data, like the procedures:
+    # rows key on id + version, versions coexist, and which one is
+    # active (highest, unless pinned) is a read-time choice made by
+    # the registry in prompts.py, never an overwrite.
+    def save_prompt_entry(self, e):
+        self._put(self.prompt_entries, _prompt_key(e.prompt_id, e.version), e)
+
+    def get_prompt_version(self, prompt_id, version):
+        return self._get(self.prompt_entries, _prompt_key(prompt_id, version))
+
+    def list_prompt_entries(self, prompt_id=None):
+        rows = self._all(self.prompt_entries)
+        if prompt_id:
+            rows = [e for e in rows if e.prompt_id == prompt_id]
+        return sorted(rows, key=lambda e: (e.prompt_id, e.version))
+
+    def save_prompt_pin(self, p): self._put(self.prompt_pins, p.prompt_id, p)
+    def get_prompt_pin(self, prompt_id): return self._get(self.prompt_pins, prompt_id)
+
+    def delete_prompt_pin(self, prompt_id):
+        with self._lock:
+            self.prompt_pins.pop(prompt_id, None)
+
+    def save_prompt_act(self, a): self._put(self.prompt_acts, a.act_id, a)
+
+    def list_prompt_acts(self, prompt_id=None):
+        rows = self._all(self.prompt_acts)
+        if prompt_id:
+            rows = [a for a in rows if a.prompt_id == prompt_id]
+        return sorted(rows, key=lambda a: a.seq)
+
     def save_audit(self, e):
         with self._lock:
             self.audit.append(copy.deepcopy(e))
@@ -511,7 +561,17 @@ _TABLES = {
     "annotations": ("annotation_id", AnnotationRecord),
     "signals": ("record_id", SignalRecord),
     "quality_digests": ("digest_date", DailyDigest),
+    "prompt_entries": ("prompt_id", PromptEntry),
+    "prompt_pins": ("prompt_id", PromptPin),
+    "prompt_acts": ("act_id", PromptAct),
 }
+
+
+def _prompt_key(prompt_id: str, version: int) -> str:
+    """The row key for one version of a registry entry — the same
+    `id:vN` shape the procedures use, so versions of an entry
+    coexist in one table."""
+    return f"{prompt_id}:v{version}"
 
 
 def _procedure_key(procedure_id: str, version: int) -> str:
@@ -763,6 +823,33 @@ class _SqlStore:
     def list_digests(self):
         return sorted(self._load_all("quality_digests"),
                       key=lambda d: d.date)
+
+    def save_prompt_entry(self, e):
+        self._save("prompt_entries", _prompt_key(e.prompt_id, e.version), e)
+
+    def get_prompt_version(self, prompt_id, version):
+        return self._load("prompt_entries", _prompt_key(prompt_id, version))
+
+    def list_prompt_entries(self, prompt_id=None):
+        rows = self._load_all("prompt_entries")
+        if prompt_id:
+            rows = [e for e in rows if e.prompt_id == prompt_id]
+        return sorted(rows, key=lambda e: (e.prompt_id, e.version))
+
+    def save_prompt_pin(self, p): self._save("prompt_pins", p.prompt_id, p)
+    def get_prompt_pin(self, prompt_id): return self._load("prompt_pins", prompt_id)
+
+    def delete_prompt_pin(self, prompt_id):
+        self._execute("DELETE FROM prompt_pins WHERE prompt_id = ?",
+                      (prompt_id,))
+
+    def save_prompt_act(self, a): self._save("prompt_acts", a.act_id, a)
+
+    def list_prompt_acts(self, prompt_id=None):
+        rows = self._load_all("prompt_acts")
+        if prompt_id:
+            rows = [a for a in rows if a.prompt_id == prompt_id]
+        return sorted(rows, key=lambda a: a.seq)
 
     def save_audit(self, e):
         self._execute(
