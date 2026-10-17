@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
-from . import payments_book, roaming_book
+from . import care_book, payments_book, roaming_book
 from .routing import classify_confirmation
 from .billing_book import (
     assess_dispute,
@@ -1494,9 +1494,118 @@ def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 # Customer care — the catch-all
 # ---------------------------------------------------------------------------
 
+# The words of a customer asking how they'll be reached — the
+# question the recorded contact preference answers.
+_CONTACT_WORDS = ("contact", "write to", "reach me", "hear from",
+                  "get in touch", "send me", "letters", "by post")
+
+
+def _recorded_need_result(account) -> SpecialistResult:
+    """The reply for a need just written on the account: what was
+    recorded, stated as the instruction it became."""
+    if account.preferred_contact:
+        line = (f"I've recorded it on your account: from now on we'll "
+                f"contact you in {account.preferred_contact}.")
+    else:
+        line = ("I've recorded it on your account, in your own words, "
+                "and we'll follow it at every contact.")
+    return SpecialistResult(
+        specialist="care",
+        findings=[Finding(
+            topic="accessibility_recorded",
+            text=f"Thank you for telling me. {line}")],
+        must_include=[line], progress=True, resolved=True)
+
 
 def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     lowered = text.lower().strip()
+    care_state = conv.specialist_state.setdefault("care", {})
+
+    # A need stated a turn ago, held for want of the account
+    # number: if this message names the account, the note lands
+    # now, before anything else the message might also be.
+    pending_note = care_state.get("pending_accessibility")
+    if pending_note:
+        account = care_book.record_accessibility(
+            ctx.store, conv, pending_note)
+        if account is not None:
+            care_state.pop("pending_accessibility", None)
+            return _recorded_need_result(account)
+
+    # A complaint becomes a record the moment it's recognised —
+    # category in code, the customer's words verbatim, the
+    # response deadline policy promises — and the reply is the
+    # acknowledgment: reference, category, date.
+    category = care_book.complaint_category(text)
+    if category is not None:
+        record = care_book.open_complaint(
+            ctx.store, conv, text, category, ctx.policy)
+        due_line = (f"We'll respond in substance by "
+                    f"{record.response_due}.")
+        ref_line = f"Your complaint reference is {record.complaint_id}."
+        return SpecialistResult(
+            specialist="care",
+            findings=[Finding(
+                topic="complaint",
+                text=("I'm sorry you've had this experience — thank you "
+                      f"for telling me plainly. {ref_line} I've recorded "
+                      f"it as a {category.replace('_', ' ')} complaint, "
+                      f"in your own words, and a person will pick it up "
+                      f"from here. {due_line}"))],
+            citations=_cite(ctx, "general",
+                            "complaint recorded response within five days"),
+            must_include=[ref_line, due_line],
+            progress=True, resolved=True)
+
+    # A stated accessibility or contact need is recorded on the
+    # account. Without an account to write it on, the desk asks
+    # for the number and holds the words — the need is never
+    # dropped because the paperwork lagged.
+    if care_book.accessibility_need(text):
+        account = care_book.record_accessibility(ctx.store, conv, text)
+        if account is not None:
+            return _recorded_need_result(account)
+        care_state["pending_accessibility"] = text
+        return SpecialistResult(
+            specialist="care",
+            findings=[Finding(
+                topic="accessibility_ask_account",
+                text=("Thank you for telling me — I want to record that "
+                      "on your account so every contact follows it. "
+                      "What's your account number (it starts NB-)?"))],
+            progress=True)
+
+    # Compliments and feedback are records too — the business
+    # mines them. A bare thank-you stays a pleasantry (below).
+    kind = care_book.feedback_kind(text)
+    if kind is not None:
+        care_book.record_feedback(ctx.store, conv, text, kind)
+        if kind == "compliment":
+            said = ("Thank you — I've recorded that as a compliment, in "
+                    "your own words, and the team will see it.")
+        else:
+            said = ("Thank you — I've recorded your feedback, in your "
+                    "own words, and the team reads it.")
+        return SpecialistResult(
+            specialist="care",
+            findings=[Finding(topic="feedback", text=said)],
+            progress=True, resolved=True)
+
+    # A contact preference on the record answers a contact
+    # question from the record — honoured, not approximated.
+    account = _account(ctx, conv)
+    if account is None:
+        number = care_book.account_number_in(text)
+        if number:
+            account = ctx.store.get_account(number)
+    if account is not None and account.preferred_contact and \
+            any(w in lowered for w in _CONTACT_WORDS):
+        line = care_book.contact_preference_line(account)
+        return SpecialistResult(
+            specialist="care",
+            findings=[Finding(topic="contact_preference", text=line)],
+            must_include=[line], progress=True, resolved=True)
+
     if lowered in ("hello", "hi", "hey", "good morning", "good afternoon") or \
             lowered.startswith(("hello", "hi there")) and len(lowered) < 24:
         return SpecialistResult(
