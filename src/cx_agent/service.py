@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import attribution, care_book, mining
+from . import attribution, care_book, mining, signals
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import make_llm
@@ -203,6 +203,20 @@ class ConversationService:
 
     def list_annotations(self, conversation_id: str | None = None):
         return self.store.list_annotations(conversation_id)
+
+    # -- conversation signals -------------------------------------------
+
+    def list_signals(self, conversation_id: str):
+        """One conversation's signal series, turn by turn — the
+        latest record is the snapshot."""
+        return self.store.list_signal_records(conversation_id)
+
+    def signal_report(self) -> dict:
+        """The signal aggregates over every stored conversation:
+        effort by entry desk, rising-frustration share, the
+        interventions' outcomes, and the descriptive
+        frustration/escalation table."""
+        return signals.signal_report(self.store, self.policy)
 
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:

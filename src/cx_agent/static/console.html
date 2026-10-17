@@ -132,6 +132,8 @@
       <button onclick="annotateSubmit()">Save annotation</button>
       <div id="ann-note" class="empty" style="margin-top:6px"></div>
     </div>
+    <h2 style="margin-top:22px">Conversation signals</h2>
+    <div id="signals"><p class="empty">No signal records yet. Every conversation turn records its signals — frustration, the effort it cost the customer, progress, confusion — and the interventions they fired.</p></div>
   </section>
 </main>
 <footer>
@@ -516,6 +518,33 @@ async function refresh() {
         '<button class="ghost" onclick="annotatePick(\'' + q.conversation_id + '\')">Annotate</button>';
       qbox.appendChild(div);
     }
+  }
+  const sig = await api("/signals/report");
+  const sbox = document.getElementById("signals");
+  if (!sig.conversations) {
+    sbox.innerHTML = '<p class="empty">No signal records yet. Every conversation turn records its signals — frustration, the effort it cost the customer, progress, confusion — and the interventions they fired.</p>';
+  } else {
+    const iv = sig.interventions;
+    const cells = sig.frustration_escalation;
+    let html = '<p class="empty">' + sig.conversations + ' conversation(s) · average effort ' +
+      sig.avg_effort + ' · frustration rose in ' + sig.rising_frustration_conversations +
+      ' (' + Math.round(sig.rising_frustration_share * 100) + '%).</p>';
+    const desks = Object.keys(sig.avg_effort_by_entry_desk);
+    if (desks.length) {
+      html += '<table class="attr"><tr><th>Entered at</th><th>Average effort</th></tr>' +
+        desks.map(d => "<tr><td>" + d + "</td><td>" + sig.avg_effort_by_entry_desk[d] +
+          "</td></tr>").join("") + "</table>";
+    }
+    html += '<p class="empty">Offers of a person: ' + iv.offered + ' made · ' + iv.accepted +
+      ' accepted · ' + iv.declined + ' declined · ' + iv.lapsed + ' lapsed' +
+      (iv.acceptance_rate !== null ? ' · acceptance rate ' + iv.acceptance_rate : '') +
+      ' · second explanation forms served: ' + iv.second_forms + '.</p>' +
+      '<p class="empty">Frustration × escalation (descriptive counts, not a causal claim): ' +
+      'rising + escalated ' + cells.rising_and_escalated +
+      ' · rising only ' + cells.rising_not_escalated +
+      ' · escalated only ' + cells.not_rising_and_escalated +
+      ' · neither ' + cells.not_rising_not_escalated + '.</p>';
+    sbox.innerHTML = html;
   }
 }
 

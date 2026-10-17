@@ -340,6 +340,28 @@ def annotate(body: AnnotationIn) -> dict:
     return record.model_dump(mode="json")
 
 
+@app.get("/signals/report", dependencies=[Depends(require_key)])
+def signal_report() -> dict:
+    """Signal aggregates over stored conversations: average
+    effort by entry desk, the rising-frustration share,
+    intervention outcomes, and the descriptive
+    frustration/escalation counts."""
+    return service.signal_report()
+
+
+@app.get("/signals/{conversation_id}", dependencies=[Depends(require_key)])
+def get_signals(conversation_id: str) -> dict:
+    """One conversation's per-turn signal series; the last record
+    is the latest snapshot."""
+    if service.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    records = service.list_signals(conversation_id)
+    return {"conversation_id": conversation_id,
+            "signals": [r.model_dump(mode="json") for r in records],
+            "latest": (records[-1].model_dump(mode="json")
+                       if records else None)}
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")

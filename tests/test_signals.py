@@ -322,3 +322,74 @@ def test_packet_summary_names_the_second_forms_used(service):
     assert packet.signals["second_forms_used"] == ["POL-CARE-01"]
     assert packet.signals["interventions"] == [
         {"kind": "second_form:POL-CARE-01", "outcome": "applied"}]
+
+
+# -- the signal report ----------------------------------------------------
+
+
+def _plant_report_world(service):
+    # Entered at billing: frustration rose, the offer was declined,
+    # the conversation never escalated. Final effort 6.
+    cid_a, _ = _frustration_path(service)
+    _say(service, cid_a,
+         "No thanks, I'll stay here. My account is NB-1001 and "
+         "the postcode is 02134.")
+    _say(service, cid_a,
+         "111111 - and honestly I'm furious, this is unacceptable.")
+    # Entered at account: the identity offer was accepted and the
+    # conversation escalated, frustration calm throughout. Effort 7.
+    cid_b, _r3, _r4 = _identity_path(service)
+    _say(service, cid_b, "Yes please.")
+    # Entered at care: two calm turns, resolved. Effort 2.
+    conv = service.start_conversation()
+    _say(service, conv.conversation_id,
+         "What time do your stores open on Saturday?")
+    _say(service, conv.conversation_id, "Thanks, that's clear now.")
+
+
+def test_signal_report_aggregates(service):
+    _plant_report_world(service)
+    report = service.signal_report()
+    assert report["conversations"] == 3
+    assert report["avg_effort"] == 5.0
+    assert report["avg_effort_by_entry_desk"] == {
+        "account": 7.0, "billing": 6.0, "care": 2.0}
+    assert report["rising_frustration_conversations"] == 1
+    assert report["rising_frustration_share"] == 0.333
+    assert report["interventions"] == {
+        "offered": 2, "accepted": 1, "declined": 1, "lapsed": 0,
+        "second_forms": 0, "acceptance_rate": 0.5}
+    assert report["frustration_escalation"] == {
+        "rising_and_escalated": 0, "rising_not_escalated": 1,
+        "not_rising_and_escalated": 1, "not_rising_not_escalated": 1}
+    assert "not evidence" in report["note"]
+
+
+def test_signal_report_on_an_empty_store(service):
+    report = service.signal_report()
+    assert report["conversations"] == 0
+    assert report["avg_effort"] == 0.0
+    assert report["interventions"]["acceptance_rate"] is None
+
+
+def test_signals_api_series_report_and_404():
+    from fastapi.testclient import TestClient
+
+    from cx_agent.api import app
+
+    client = TestClient(app)
+    client.post("/seed")
+    cid = client.post("/conversations").json()["conversation_id"]
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "What time do your stores open on Saturday?"})
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "I don't understand - what do you mean?"})
+    body = client.get(f"/signals/{cid}").json()
+    assert [r["turn"] for r in body["signals"]] == [1, 2]
+    assert body["latest"]["confusion_topic"] == "POL-CARE-01"
+    assert body["latest"]["interventions"] == [
+        {"kind": "second_form:POL-CARE-01", "outcome": "applied"}]
+    report = client.get("/signals/report").json()
+    assert report["conversations"] >= 1
+    assert "avg_effort_by_entry_desk" in report
+    assert client.get("/signals/CONV-NOPE").status_code == 404

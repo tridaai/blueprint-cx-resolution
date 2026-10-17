@@ -10,6 +10,8 @@
     cx-agent attribution     the attribution report (cause x desk,
                              this window against the previous one)
     cx-agent annotation-queue the human review queue + agreement
+    cx-agent signals         the conversation-signal report (effort,
+                             frustration, interventions)
 """
 
 from __future__ import annotations
@@ -77,6 +79,28 @@ def main(argv: list[str] | None = None) -> int:
                   f"routing_error {join['routing_error']}, "
                   f"other {join['other_cause']}, "
                   f"unattributed {join['unattributed']}")
+        return 0
+    if cmd == "signals":
+        report = service.signal_report()
+        print(f"Conversation signals — {report['conversations']} "
+              f"conversation(s) with signal records")
+        print(f"  average effort: {report['avg_effort']}")
+        for desk, avg in report["avg_effort_by_entry_desk"].items():
+            print(f"    entered at {desk:<10} {avg}")
+        print(f"  frustration rose in "
+              f"{report['rising_frustration_conversations']} "
+              f"({report['rising_frustration_share']})")
+        iv = report["interventions"]
+        print(f"  offers: {iv['offered']} made, {iv['accepted']} accepted, "
+              f"{iv['declined']} declined, {iv['lapsed']} lapsed "
+              f"(acceptance rate {iv['acceptance_rate']}); "
+              f"second forms served: {iv['second_forms']}")
+        cells = report["frustration_escalation"]
+        print(f"  frustration x escalation (descriptive): "
+              f"rising+escalated {cells['rising_and_escalated']}, "
+              f"rising only {cells['rising_not_escalated']}, "
+              f"escalated only {cells['not_rising_and_escalated']}, "
+              f"neither {cells['not_rising_not_escalated']}")
         return 0
     if cmd == "annotation-queue":
         for row in service.annotation_queue():
