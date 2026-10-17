@@ -18,7 +18,7 @@ def test_health_and_readiness_lifecycle():
     assert client.get("/readiness").status_code == 503  # nothing seeded yet
     seeded = client.post("/seed")
     assert seeded.status_code == 200
-    assert seeded.json()["seeded"]["customers"] == 14
+    assert seeded.json()["seeded"]["customers"] == 15
     ready = client.get("/readiness")
     assert ready.status_code == 200
     body = ready.json()

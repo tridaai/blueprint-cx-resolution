@@ -14,6 +14,11 @@ a usage profile on every account, Nadia Hassan past the fair-use
 ceiling in Greece with no warning on record anywhere, and Chris
 Novak's Roam Pass — activated on the record before his Italy
 trip, so his roaming charge is covered by it.
+
+Round 7 adds the payments book's facts: Marta Nowak's payment
+arrangement, written before 'now' with its first instalment
+already past due and unpaid — broken by derivation whenever the
+record is read, which is what her next contact runs into.
 """
 
 from __future__ import annotations
@@ -100,6 +105,7 @@ def build_customers() -> list[Customer]:
         ("CUST-012", "Felix Adeyemi", "NB-1012", "80202", 17, False),
         ("CUST-013", "Nadia Hassan", "NB-1013", "10025", 14, False),
         ("CUST-014", "Chris Novak", "NB-1014", "60607", 9, False),
+        ("CUST-015", "Marta Nowak", "NB-1015", "11215", 22, False),
     ]
     return [
         Customer(customer_id=cid, full_name=name, account_number=acct,
@@ -182,6 +188,11 @@ def build_accounts() -> list[Account]:
                 balance_due=D("85.86"), payment_method_last4="9021", cycle_day=19,
                 roaming_country="Italy", roaming_gb_used=D("12"),
                 roaming_since="2026-09-20", typical_daily_data_gb=D("0.8")),
+        # Marta's arrangement (seeded below) was written over
+        # this balance; its first instalment is already past due.
+        Account(account_number="NB-1015", customer_id="CUST-015", plan_id="PLAN-ESS",
+                balance_due=D("187.50"), payment_method_last4="3355", cycle_day=19,
+                typical_daily_data_gb=D("0.5")),
     ]]
 
 
@@ -410,13 +421,32 @@ def build_policies() -> list[PolicyDocument]:
          "is offered a human agent."),
         ("POL-PAY-01", "Payment arrangements", "payments",
          "A customer who cannot pay in full may split a balance of $100 or "
-         "more into up to three equal monthly instalments, with no fee, as "
-         "long as the account is not already in collections. The arrangement "
-         "is confirmed by the customer and recorded on the account."),
+         "more into up to three monthly instalments, each of at least $25, "
+         "with no fee, as long as the account is not already in collections "
+         "and has no arrangement already running. The first instalment "
+         "falls due within 14 days and the rest follow monthly. The "
+         "arrangement is confirmed by the customer and recorded on the "
+         "account, with its amounts and dates. An instalment that passes "
+         "its date unpaid breaks the arrangement, and a broken arrangement "
+         "is handled by a person — it is not renegotiated in chat."),
         ("POL-PAY-02", "Payment methods", "payments",
          "The card on file can be replaced once identity is verified. Only "
          "the last four digits are ever shown or stored in the conversation. "
          "A replacement card takes effect for the next bill."),
+        ("POL-PAY-03", "Failed payments, refunds and autopay", "payments",
+         "When a payment is declined, the reason decides what happens "
+         "next. A soft decline — insufficient funds, or the processor not "
+         "answering — leaves the card usable, and the payment can be tried "
+         "again once the cause is fixed. A hard decline — an expired "
+         "card, a card reported lost, or a closed account — means that "
+         "card can never be charged again: it is not retried, and the "
+         "customer is asked for a new card instead. Refunds go back to "
+         "the payment method on the account, and nowhere else — not to "
+         "another card, not to a bank account, not by cheque. Money owed "
+         "back is read from the account, never from the conversation. "
+         "With autopay on, each bill is taken automatically from the "
+         "method on file; if that payment fails, the customer is told "
+         "what failed, and why, at their next contact."),
         ("POL-ESC-01", "Speaking to a human", "escalation",
          "A customer can always reach a human agent. The agent will first "
          "offer to solve the problem itself; if the customer asks again, or "
@@ -572,6 +602,33 @@ def _seed_roaming_history(store) -> None:
     ))
 
 
+def _seed_payment_history(store) -> None:
+    """A payment arrangement from before 'now' — the record the
+    broken-arrangement rule reads. Marta Nowak (NB-1015) split her
+    $187.50 balance into three instalments of $62.50 on
+    2026-09-05; the first fell due on 2026-09-19 and was never
+    paid, so the arrangement derives as broken on any later read.
+    """
+    from .models import ArrangementInstallment, PaymentArrangement
+
+    store.save_payment_arrangement(PaymentArrangement(
+        arrangement_id="ARR-HIST-1015",
+        conversation_id="CONV-HIST-1015",
+        account_number="NB-1015",
+        total=D("187.50"),
+        installments=[
+            ArrangementInstallment(number=1, amount=D("62.50"),
+                                   due_date="2026-09-19"),
+            ArrangementInstallment(number=2, amount=D("62.50"),
+                                   due_date="2026-10-19"),
+            ArrangementInstallment(number=3, amount=D("62.50"),
+                                   due_date="2026-11-18"),
+        ],
+        state="active",
+        created_date="2026-09-05",
+    ))
+
+
 def seed_store(store) -> dict:
     """Write the whole book into a store and embed the policy corpus.
     Returns counts for readiness/demo output."""
@@ -602,6 +659,7 @@ def seed_store(store) -> dict:
         store.save_procedure(proc)
     _seed_credit_history(store)
     _seed_roaming_history(store)
+    _seed_payment_history(store)
     return {
         "plans": len(plans), "offers": len(offers), "customers": len(customers),
         "accounts": len(accounts), "bills": len(bills),
