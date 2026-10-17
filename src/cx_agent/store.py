@@ -47,6 +47,7 @@ from .models import (
     Bill,
     Conversation,
     Customer,
+    DisputeCase,
     Escalation,
     Offer,
     Plan,
@@ -114,6 +115,7 @@ class Store(Protocol):
     def list_offers(self) -> list[Offer]: ...
     def save_bill(self, b: Bill) -> None: ...
     def get_bill_for_account(self, account_number: str) -> Bill | None: ...
+    def list_bills_for_account(self, account_number: str) -> list[Bill]: ...
     def save_policy(self, d: PolicyDocument) -> None: ...
     def get_policy(self, doc_id: str) -> PolicyDocument | None: ...
     def list_policies(self) -> list[PolicyDocument]: ...
@@ -129,6 +131,10 @@ class Store(Protocol):
     def list_conversations(self) -> list[Conversation]: ...
     def save_action(self, a: ActionRecord) -> None: ...
     def list_actions(self, conversation_id: str | None = None) -> list[ActionRecord]: ...
+    def save_dispute_case(self, d: DisputeCase) -> None: ...
+    def get_dispute_case(self, case_id: str) -> DisputeCase | None: ...
+    def list_dispute_cases(self, conversation_id: str | None = None,
+                           account_number: str | None = None) -> list[DisputeCase]: ...
     def save_escalation(self, e: Escalation) -> None: ...
     def list_escalations(self) -> list[Escalation]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
@@ -145,12 +151,13 @@ class InMemoryStore:
         self.accounts: dict[str, Account] = {}
         self.plans: dict[str, Plan] = {}
         self.offers: dict[str, Offer] = {}
-        self.bills: dict[str, Bill] = {}  # by account_number
+        self.bills: dict[str, Bill] = {}  # by bill_id — an account has a history
         self.policies: dict[str, PolicyDocument] = {}
         self.embeddings: dict[str, list[float]] = {}
         self.procedures: dict[str, Procedure] = {}
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
+        self.dispute_cases: dict[str, DisputeCase] = {}
         self.escalations: dict[str, Escalation] = {}
         self.audit: list[AuditEvent] = []
 
@@ -184,8 +191,17 @@ class InMemoryStore:
     def save_offer(self, o): self._put(self.offers, o.offer_id, o)
     def get_offer(self, offer_id): return self._get(self.offers, offer_id)
     def list_offers(self): return self._all(self.offers)
-    def save_bill(self, b): self._put(self.bills, b.account_number, b)
-    def get_bill_for_account(self, account_number): return self._get(self.bills, account_number)
+    def save_bill(self, b): self._put(self.bills, b.bill_id, b)
+
+    def list_bills_for_account(self, account_number):
+        rows = [b for b in self._all(self.bills)
+                if b.account_number == account_number]
+        return sorted(rows, key=lambda b: (b.issued, b.bill_id))
+
+    def get_bill_for_account(self, account_number):
+        rows = self.list_bills_for_account(account_number)
+        return rows[-1] if rows else None
+
     def save_policy(self, d): self._put(self.policies, d.doc_id, d)
     def get_policy(self, doc_id): return self._get(self.policies, doc_id)
     def list_policies(self): return self._all(self.policies)
@@ -213,6 +229,17 @@ class InMemoryStore:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: (r.turn, r.action_id))
 
+    def save_dispute_case(self, d): self._put(self.dispute_cases, d.case_id, d)
+    def get_dispute_case(self, case_id): return self._get(self.dispute_cases, case_id)
+
+    def list_dispute_cases(self, conversation_id=None, account_number=None):
+        rows = self._all(self.dispute_cases)
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        if account_number:
+            rows = [r for r in rows if r.account_number == account_number]
+        return sorted(rows, key=lambda r: r.case_id)
+
     def save_escalation(self, e): self._put(self.escalations, e.escalation_id, e)
     def list_escalations(self): return self._all(self.escalations)
 
@@ -238,11 +265,12 @@ _TABLES = {
     "accounts": ("account_number", Account),
     "plans": ("plan_id", Plan),
     "offers": ("offer_id", Offer),
-    "bills": ("account_number", Bill),
+    "bills": ("bill_id", Bill),
     "policies": ("doc_id", PolicyDocument),
     "procedures": ("procedure_id", Procedure),
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
+    "dispute_cases": ("case_id", DisputeCase),
     "escalations": ("escalation_id", Escalation),
 }
 
@@ -301,8 +329,17 @@ class _SqlStore:
     def save_offer(self, o): self._save("offers", o.offer_id, o)
     def get_offer(self, offer_id): return self._load("offers", offer_id)
     def list_offers(self): return self._load_all("offers")
-    def save_bill(self, b): self._save("bills", b.account_number, b)
-    def get_bill_for_account(self, account_number): return self._load("bills", account_number)
+    def save_bill(self, b): self._save("bills", b.bill_id, b)
+
+    def list_bills_for_account(self, account_number):
+        rows = [b for b in self._load_all("bills")
+                if b.account_number == account_number]
+        return sorted(rows, key=lambda b: (b.issued, b.bill_id))
+
+    def get_bill_for_account(self, account_number):
+        rows = self.list_bills_for_account(account_number)
+        return rows[-1] if rows else None
+
     def save_policy(self, d): self._save("policies", d.doc_id, d)
     def get_policy(self, doc_id): return self._load("policies", doc_id)
     def list_policies(self): return self._load_all("policies")
@@ -319,6 +356,17 @@ class _SqlStore:
         if conversation_id:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: (r.turn, r.action_id))
+
+    def save_dispute_case(self, d): self._save("dispute_cases", d.case_id, d)
+    def get_dispute_case(self, case_id): return self._load("dispute_cases", case_id)
+
+    def list_dispute_cases(self, conversation_id=None, account_number=None):
+        rows = self._load_all("dispute_cases")
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        if account_number:
+            rows = [r for r in rows if r.account_number == account_number]
+        return sorted(rows, key=lambda r: r.case_id)
 
     def save_escalation(self, e): self._save("escalations", e.escalation_id, e)
     def list_escalations(self): return self._load_all("escalations")

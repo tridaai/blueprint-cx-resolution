@@ -60,3 +60,53 @@ def test_sqlite_is_the_local_default_profile(tmp_path):
     store = SqliteStore(tmp_path / "cx.db")
     assert store.profile == "sqlite"
     assert (tmp_path / "cx.db").exists()
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_bill_history_and_dispute_cases(kind, tmp_path):
+    """Round 3 records behave identically on every store: bills are
+    a per-account history ordered by issue date (latest wins), and
+    dispute cases round-trip with their per-line decisions."""
+    from decimal import Decimal as D
+
+    from cx_agent.models import Bill, BillCharge, DisputeCase, DisputeLine
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+
+    older = Bill(bill_id="BILL-T-OLD", account_number="NB-T",
+                 cycle_start="2026-08-13", cycle_end="2026-09-11",
+                 issued="2026-09-12", due="2026-10-03",
+                 charges=[BillCharge(charge_id="C1", kind="plan",
+                                     description="Plan", amount=D("40.00"))])
+    newer = Bill(bill_id="BILL-T-NEW", account_number="NB-T",
+                 cycle_start="2026-09-12", cycle_end="2026-10-11",
+                 issued="2026-10-12", due="2026-11-02",
+                 charges=[BillCharge(charge_id="C2", kind="plan",
+                                     description="Plan", amount=D("45.00"))])
+    store.save_bill(newer)
+    store.save_bill(older)  # saved out of order; reads must sort by issue date
+    history = store.list_bills_for_account("NB-T")
+    assert [b.bill_id for b in history] == ["BILL-T-OLD", "BILL-T-NEW"]
+    assert store.get_bill_for_account("NB-T").bill_id == "BILL-T-NEW"
+    assert store.list_bills_for_account("NB-NONE") == []
+    assert store.get_bill_for_account("NB-NONE") is None
+
+    case = DisputeCase(
+        case_id="DSP-T1", conversation_id="CONV-T", account_number="NB-T",
+        bill_id="BILL-T-NEW", state="decided_partial",
+        lines=[DisputeLine(charge_id="C2", description="Plan",
+                           amount=D("45.00"), disputed_amount=D("5.00"),
+                           decision="declined", reason="matches the plan price")],
+        credit_applied=D("0"), created_date="2026-10-20",
+        updated_date="2026-10-20")
+    store.save_dispute_case(case)
+    loaded = store.get_dispute_case("DSP-T1")
+    assert loaded.state == "decided_partial"
+    assert loaded.lines[0].decision == "declined"
+    assert store.list_dispute_cases(conversation_id="CONV-T")[0].case_id == "DSP-T1"
+    assert store.list_dispute_cases(account_number="NB-T")[0].case_id == "DSP-T1"
+    assert store.list_dispute_cases(account_number="NB-OTHER") == []
+    assert store.get_dispute_case("DSP-NONE") is None
