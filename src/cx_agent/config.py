@@ -93,6 +93,19 @@ class Policy:
     arrangement_min_installment: Decimal = Decimal("25.00")
     arrangement_first_due_days: int = 14
     arrangement_interval_days: int = 30
+    # Complaints (POL-CARE-02): the substantive response is due
+    # this many days after the complaint is recorded; the SLA
+    # watch calls a still-open complaint breached once that date
+    # passes, and near-breach within this many days of it.
+    complaint_response_days: int = 5
+    complaint_near_breach_days: int = 1
+    # Unhandled-intent mining: a cluster becomes a candidate for
+    # the new-intent report at this many conversations, and two
+    # utterances cluster together at or above this cosine over the
+    # repo's own embedder (measured: same-need phrasings score
+    # ~0.39+, unrelated unhandled asks ~0.22 or less).
+    mining_min_cluster: int = 3
+    mining_similarity: float = 0.30
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -102,6 +115,10 @@ class Policy:
         def num(name: str, default: int) -> int:
             raw = _env(name)
             return int(raw) if raw else default
+
+        def flt(name: str, default: float) -> float:
+            raw = _env(name)
+            return float(raw) if raw else default
 
         base = cls()
         return cls(
@@ -132,6 +149,14 @@ class Policy:
                 "CX_ARRANGEMENT_FIRST_DUE_DAYS", base.arrangement_first_due_days),
             arrangement_interval_days=num(
                 "CX_ARRANGEMENT_INTERVAL_DAYS", base.arrangement_interval_days),
+            complaint_response_days=num(
+                "CX_COMPLAINT_RESPONSE_DAYS", base.complaint_response_days),
+            complaint_near_breach_days=num(
+                "CX_COMPLAINT_NEAR_BREACH_DAYS", base.complaint_near_breach_days),
+            mining_min_cluster=num(
+                "CX_MINING_MIN_CLUSTER", base.mining_min_cluster),
+            mining_similarity=flt(
+                "CX_MINING_SIMILARITY", base.mining_similarity),
         )
 
 

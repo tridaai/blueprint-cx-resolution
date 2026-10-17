@@ -50,7 +50,7 @@ def test_store_contract(kind, tmp_path):
     assert loaded.identity_state.value == "unverified"
 
     vectors = store.list_embeddings()
-    assert len(vectors) == 15
+    assert len(vectors) == 16
     assert all(len(v) == 384 for _d, v in vectors)
     with pytest.raises(EmbeddingDimensionError):
         store.set_embedding("POL-BILL-01", [0.1, 0.2])

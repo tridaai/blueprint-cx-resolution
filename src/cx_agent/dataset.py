@@ -456,6 +456,19 @@ def build_policies() -> list[PolicyDocument]:
          "Northbeam stores are open Monday to Saturday, 9am to 6pm local "
          "time. The support line is staffed 24 hours a day. Store staff can "
          "help with SIM swaps and device setup in person."),
+        ("POL-CARE-02", "Complaints, feedback and how we contact you", "general",
+         "A complaint is recorded the moment a customer makes one — their "
+         "words, a category, and a reference the customer is given there "
+         "and then. A person responds in substance within five days; a "
+         "complaint still open after that is escalated to the care team. "
+         "Compliments and feedback are recorded too, in the customer's "
+         "own words. When a customer tells us how they need to be "
+         "contacted — large print, braille, easy read, email or text "
+         "instead of letters or calls — the need is recorded on the "
+         "account and honoured at every later contact. When a customer "
+         "tells us plainly about a bereavement, a serious illness or "
+         "money hardship, that is recorded on the account from their own "
+         "statement and a person from the care team handles the contact."),
         ("POL-TECH-01", "Fixing connection problems", "technical",
          "Connection problems are worked through in a fixed order: confirm "
          "coverage, restart the device, reseat the SIM, then reset network "

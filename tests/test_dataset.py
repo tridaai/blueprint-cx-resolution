@@ -80,8 +80,8 @@ def test_seed_writes_everything_with_embeddings():
     store = InMemoryStore()
     counts = seed_store(store)
     assert counts == {"plans": 4, "offers": 3, "customers": 15, "accounts": 15,
-                      "bills": 16, "policies": 15, "procedures": 4,
+                      "bills": 16, "policies": 16, "procedures": 4,
                       "roaming_rates": 16}
     embeddings = store.list_embeddings()
-    assert len(embeddings) == 15
+    assert len(embeddings) == 16
     assert all(len(vec) == 384 for _doc, vec in embeddings)
