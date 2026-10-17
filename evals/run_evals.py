@@ -34,7 +34,8 @@ from cx_agent.store import InMemoryStore  # noqa: E402
 # must", "money moved (or didn't) exactly", "identity was (or
 # wasn't) established".
 ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
-           "identity_state", "payment_method_last4", "executed_kinds"}
+           "identity_state", "payment_method_last4", "executed_kinds",
+           "dispute_credit"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -98,6 +99,8 @@ def check_final(service, scenario: dict, conv_id: str,
     executed = sorted(a.kind.value for a in store.list_actions(conv_id)
                       if a.status == "executed")
     audit = store.list_audit(conv_id)
+    cases = store.list_dispute_cases(conversation_id=conv_id)
+    case = cases[-1] if cases else None
     values = {
         "status": conv.status if conv else None,
         "unhandled_logged": bool(conv and conv.unhandled_intent),
@@ -109,6 +112,10 @@ def check_final(service, scenario: dict, conv_id: str,
         "balance_due": str(account.balance_due) if account else None,
         "plan_id": account.plan_id if account else None,
         "payment_method_last4": account.payment_method_last4 if account else None,
+        "dispute_state": case.state if case else None,
+        "dispute_credit": str(case.credit_applied) if case else None,
+        "dispute_decisions": ([line.decision for line in case.lines]
+                              if case else []),
     }
     for key, want in final.items():
         total += 1
