@@ -47,7 +47,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("CX_TODAY", "2026-10-01")
 
-from cx_agent import care_book, mining, payments_book  # noqa: E402
+from cx_agent import attribution, care_book, mining, payments_book  # noqa: E402
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
 from cx_agent.store import InMemoryStore  # noqa: E402
@@ -95,7 +95,11 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # Round 9: which account a conversation is bound to, and
            # another account's untouched state, are the cross-account
            # invariants — exact or failed.
-           "conv_account", "other_balance_due", "other_plan_id"}
+           "conv_account", "other_balance_due", "other_plan_id",
+           # Round 10: why a conversation ended is a record, not an
+           # impression — the outcome, the cause and the rule that
+           # fired are exact or failed.
+           "attribution_outcome", "attribution_cause", "attribution_rule"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -282,6 +286,14 @@ def check_final(service, scenario: dict, conv_id: str,
     values["mining_top_count"] = max(
         (c["count"] for c in report["candidates"]), default=0)
     values["mining_labels"] = [c["label"] for c in report["candidates"]]
+    # Round 10: the attribution record this conversation earned,
+    # computed from its trail by the same code the operators run —
+    # the pass attributes it here because a scripted conversation
+    # is over when its turns are, whatever state it ended in.
+    record = attribution.attribute_conversation(store, conv_id)
+    values["attribution_outcome"] = record.outcome if record else None
+    values["attribution_cause"] = record.cause if record else None
+    values["attribution_rule"] = record.rule if record else None
     for key, want in final.items():
         total += 1
         is_zt = scenario_zt or key in ZT_KEYS
