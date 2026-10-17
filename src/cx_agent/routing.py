@@ -9,11 +9,18 @@ The same module classifies the two short replies the conversation
 protocol depends on: confirmation answers to a proposed action, and
 step outcomes inside a troubleshooting procedure. Both are small
 closed vocabularies on purpose — a "yes" must never be a guess.
+
+`analyze` is the router read as evidence: the matched signals, the
+leaders, the runner-up, and two honesty flags — `ambiguous` (two
+desks tie on a real signal; the supervisor asks rather than
+guesses) and `low_confidence` (no clear signal; the care desk, not
+a transactional desk, takes the turn).
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 from .models import Intent
 
@@ -96,6 +103,115 @@ def route(text: str, hint: str | None = None) -> Intent:
         if candidate in leaders:
             return candidate
     return leaders[0]
+
+
+# ---------------------------------------------------------------------------
+# Route analysis — the router shows its working
+# ---------------------------------------------------------------------------
+
+# A tie is only worth a clarifying question when both readings rest
+# on a real signal. Two stray weight-1 words pointing different ways
+# are separable by the documented tie order; two weight-4 phrases
+# are two genuine needs in one message.
+CLARIFY_MIN_SCORE = 3
+
+# A turn whose best score is one weak phrase ("fee", "trip") has no
+# clear signal: it belongs with the care desk, never with a
+# transactional desk on a guess.
+LOW_CONFIDENCE_MAX_SCORE = 1
+
+# How each desk reads in plain words — the supervisor's clarifying
+# question offers these, not desk names.
+READINGS: dict[Intent, str] = {
+    Intent.BILLING: "your bill",
+    Intent.ROAMING: "using your phone abroad",
+    Intent.OFFERS: "changing your plan",
+    Intent.TECHNICAL: "a fault with your service",
+    Intent.ACCOUNT: "a payment, or the card on your account",
+    Intent.CARE: "something else",
+}
+
+# The words people actually use to name a desk when they answer a
+# clarifying question in their own way ("the signal one").
+_ANSWER_WORDS: dict[Intent, list[str]] = {
+    Intent.BILLING: ["bill", "charge", "invoice", "refund"],
+    Intent.ROAMING: ["roam", "abroad", "travel", "trip", "holiday"],
+    Intent.OFFERS: ["plan", "offer", "upgrade", "deal"],
+    Intent.TECHNICAL: ["signal", "fault", "service", "internet",
+                        "connection", "phone"],
+    Intent.ACCOUNT: ["pay", "card", "payment", "debit"],
+    Intent.CARE: [],
+}
+
+
+def match_signals(text: str) -> dict[Intent, list[str]]:
+    """The phrases that matched, per intent — the evidence behind
+    the scores, kept so a routing decision can be inspected."""
+    lowered = f" {text.lower()} "
+    matched: dict[Intent, list[str]] = {}
+    for intent, phrases in _PHRASES.items():
+        hits = [phrase for phrase, _weight in phrases if phrase in lowered]
+        if hits:
+            matched[intent] = hits
+    return matched
+
+
+@dataclass
+class RouteAnalysis:
+    scores: dict[Intent, int] = field(default_factory=dict)
+    signals: dict[Intent, list[str]] = field(default_factory=dict)
+    leaders: list[Intent] = field(default_factory=list)  # tied at the top
+    runner_up: Intent | None = None  # best of the rest, if any scored
+    top_score: int = 0
+    # Exactly two desks tie on a real signal and neither is the
+    # care catch-all: the router cannot separate them.
+    ambiguous: bool = False
+    # No clear signal at all: at most one weak phrase matched.
+    low_confidence: bool = False
+
+
+def analyze(text: str) -> RouteAnalysis:
+    """Read a message the way the supervisor needs it read: what
+    matched, who leads, who is runner-up, and whether the table can
+    honestly separate the top two readings."""
+    scores = score_intents(text)
+    out = RouteAnalysis(scores=scores, signals=match_signals(text))
+    if not scores:
+        out.low_confidence = True
+        return out
+    out.top_score = max(scores.values())
+    out.leaders = [i for i, s in scores.items() if s == out.top_score]
+    rest = [i for i, s in scores.items() if s < out.top_score]
+    if rest:
+        out.runner_up = max(rest, key=lambda i: scores[i])
+    out.low_confidence = out.top_score <= LOW_CONFIDENCE_MAX_SCORE
+    out.ambiguous = (
+        len(out.leaders) == 2
+        and out.top_score >= CLARIFY_MIN_SCORE
+        and Intent.CARE not in out.leaders
+    )
+    return out
+
+
+def resolve_clarification(text: str, options: list[Intent]) -> Intent | None:
+    """Did this reply pick one of the two offered readings? Scores
+    first (counted only across the offered pair), then the words
+    people name desks by. None means the reply settled nothing and
+    the router must commit without asking again."""
+    scores = score_intents(text)
+    offered = {intent: scores.get(intent, 0) for intent in options}
+    best = max(offered.values())
+    if best > 0:
+        winners = [i for i, s in offered.items() if s == best]
+        if len(winners) == 1:
+            return winners[0]
+    lowered = text.lower()
+    hits = [intent for intent in options
+            if any(re.search(rf"\b{w}\b", lowered)
+                   for w in _ANSWER_WORDS.get(intent, []))]
+    if len(hits) == 1:
+        return hits[0]
+    return None
 
 
 _CONFIRM = [
