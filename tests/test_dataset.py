@@ -11,10 +11,21 @@ from cx_agent.dataset import (
 from cx_agent.store import InMemoryStore
 
 
+def _latest_bills() -> dict:
+    """The current bill per account — build_bills now returns the
+    previous cycle too, and the balance speaks of the latest."""
+    latest = {}
+    for bill in build_bills():
+        current = latest.get(bill.account_number)
+        if current is None or bill.issued > current.issued:
+            latest[bill.account_number] = bill
+    return latest
+
+
 def test_book_is_internally_consistent():
     customers = {c.customer_id: c for c in build_customers()}
     accounts = build_accounts()
-    bills = {b.account_number: b for b in build_bills()}
+    bills = _latest_bills()
     for account in accounts:
         assert account.customer_id in customers
         assert customers[account.customer_id].account_number == account.account_number
@@ -26,7 +37,7 @@ def test_book_is_internally_consistent():
 
 
 def test_gold_facts_the_evals_lean_on():
-    bills = {b.account_number: b for b in build_bills()}
+    bills = _latest_bills()
     duplicates = [c for c in bills["NB-1001"].charges if c.duplicate_of]
     assert len(duplicates) == 1 and duplicates[0].amount == Decimal("9.99")
     after_cancel = [c for c in bills["NB-1006"].charges if c.after_cancellation]
@@ -34,6 +45,19 @@ def test_gold_facts_the_evals_lean_on():
     accounts = {a.account_number: a for a in build_accounts()}
     assert accounts["NB-1002"].roaming_gb_used == Decimal("31")
     assert accounts["NB-1010"].balance_due == Decimal("212.40")
+    # Round 3 gold: Felix's roaming line is billed $58 over its rate
+    # (above the evidenced cap, so his dispute escalates), Ruth's
+    # bill is exactly right, and every billed account has a previous
+    # bill to compare against.
+    roaming = next(c for c in bills["NB-1012"].charges if c.kind == "roaming")
+    assert roaming.amount - roaming.expected_amount == Decimal("58.00")
+    assert all(c.expected_amount is None and not c.duplicate_of
+               and not c.after_cancellation for c in bills["NB-1011"].charges)
+    billed = {b.account_number for b in build_bills()}
+    history = {}
+    for bill in build_bills():
+        history.setdefault(bill.account_number, []).append(bill)
+    assert all(len(history[n]) == 2 for n in billed)
 
 
 def test_corpus_and_procedures_cover_the_desks():
@@ -47,8 +71,8 @@ def test_corpus_and_procedures_cover_the_desks():
 def test_seed_writes_everything_with_embeddings():
     store = InMemoryStore()
     counts = seed_store(store)
-    assert counts == {"plans": 4, "offers": 3, "customers": 10, "accounts": 10,
-                      "bills": 4, "policies": 12, "procedures": 3}
+    assert counts == {"plans": 4, "offers": 3, "customers": 12, "accounts": 12,
+                      "bills": 12, "policies": 12, "procedures": 3}
     embeddings = store.list_embeddings()
     assert len(embeddings) == 12
     assert all(len(vec) == 384 for _doc, vec in embeddings)

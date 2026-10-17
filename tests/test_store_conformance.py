@@ -41,7 +41,7 @@ def test_store_contract(kind, tmp_path):
     bill = store.get_bill_for_account("NB-1001")
     assert bill.total == Decimal("94.35")
     assert store.get_customer_by_account("NB-1001").full_name == "Amara Osei"
-    assert store.count_customers() == 10
+    assert store.count_customers() == 12
 
     conv = Conversation(conversation_id="CONV-X")
     store.save_conversation(conv)

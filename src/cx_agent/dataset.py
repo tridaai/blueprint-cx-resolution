@@ -72,6 +72,8 @@ def build_customers() -> list[Customer]:
         ("CUST-008", "Sam Whitfield", "NB-1008", "75201", 12, True),
         ("CUST-009", "June Park", "NB-1009", "98101", 30, False),
         ("CUST-010", "Oliver Grant", "NB-1010", "33101", 5, False),
+        ("CUST-011", "Ruth Callaghan", "NB-1011", "55401", 34, False),
+        ("CUST-012", "Felix Adeyemi", "NB-1012", "80202", 17, False),
     ]
     return [
         Customer(customer_id=cid, full_name=name, account_number=acct,
@@ -104,13 +106,22 @@ def build_accounts() -> list[Account]:
                 balance_due=D("75.00"), payment_method_last4="1173", cycle_day=22),
         Account(account_number="NB-1010", customer_id="CUST-010", plan_id="PLAN-ESS",
                 balance_due=D("212.40"), payment_method_last4="4029", cycle_day=19),
+        Account(account_number="NB-1011", customer_id="CUST-011", plan_id="PLAN-ESS",
+                balance_due=D("72.61"), payment_method_last4="7305", cycle_day=19),
+        Account(account_number="NB-1012", customer_id="CUST-012", plan_id="PLAN-ESS",
+                balance_due=D("130.38"), payment_method_last4="2214", cycle_day=19),
     ]
 
 
-def _bill(bill_id: str, acct: str, charges: list[BillCharge]) -> Bill:
-    return Bill(bill_id=bill_id, account_number=acct, cycle_start="2026-09-12",
-                cycle_end="2026-10-11", issued="2026-10-12", due="2026-11-02",
-                charges=charges)
+_CURRENT_CYCLE = ("2026-09-12", "2026-10-11", "2026-10-12", "2026-11-02")
+_PREVIOUS_CYCLE = ("2026-08-13", "2026-09-11", "2026-09-12", "2026-10-03")
+
+
+def _bill(bill_id: str, acct: str, charges: list[BillCharge],
+          cycle: tuple[str, str, str, str] = _CURRENT_CYCLE) -> Bill:
+    start, end, issued, due = cycle
+    return Bill(bill_id=bill_id, account_number=acct, cycle_start=start,
+                cycle_end=end, issued=issued, due=due, charges=charges)
 
 
 def build_bills() -> list[Bill]:
@@ -155,6 +166,70 @@ def build_bills() -> list[Bill]:
             BillCharge(charge_id="CH-1010-4", kind="tax",
                        description="Taxes and regulatory fees", amount=D("5.02")),
         ]),
+        _bill("BILL-1011", "NB-1011", [
+            BillCharge(charge_id="CH-1011-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1011-2", kind="device",
+                       description="Handset instalment 6 of 24", amount=D("22.50")),
+            BillCharge(charge_id="CH-1011-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("5.11")),
+        ]),
+        _bill("BILL-1012", "NB-1012", [
+            BillCharge(charge_id="CH-1012-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1012-2", kind="roaming",
+                       description="Roaming data — Greece (pay per GB)",
+                       amount=D("78.00"), expected_amount=D("20.00")),
+            BillCharge(charge_id="CH-1012-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("7.38")),
+        ]),
+        # The previous cycle for every billed account — explanations
+        # compare against these, and bill shock is measured against
+        # the trailing average they form.
+        _bill("BILL-1001-PREV", "NB-1001", [
+            BillCharge(charge_id="CH-1001P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1001P-2", kind="one_off",
+                       description="Device protection — monthly", amount=D("9.99")),
+            BillCharge(charge_id="CH-1001P-3", kind="device",
+                       description="Handset instalment 13 of 24", amount=D("22.50")),
+            BillCharge(charge_id="CH-1001P-4", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("6.86")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1002-PREV", "NB-1002", [
+            BillCharge(charge_id="CH-1002P-1", kind="plan",
+                       description="Unlimited Max — monthly plan", amount=D("75.00")),
+            BillCharge(charge_id="CH-1002P-2", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("9.12")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1006-PREV", "NB-1006", [
+            BillCharge(charge_id="CH-1006P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1006P-2", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("4.10")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1010-PREV", "NB-1010", [
+            BillCharge(charge_id="CH-1010P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1010P-2", kind="device",
+                       description="Handset instalment 8 of 24", amount=D("18.75")),
+            BillCharge(charge_id="CH-1010P-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("5.02")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1011-PREV", "NB-1011", [
+            BillCharge(charge_id="CH-1011P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1011P-2", kind="device",
+                       description="Handset instalment 5 of 24", amount=D("22.50")),
+            BillCharge(charge_id="CH-1011P-3", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("5.11")),
+        ], cycle=_PREVIOUS_CYCLE),
+        _bill("BILL-1012-PREV", "NB-1012", [
+            BillCharge(charge_id="CH-1012P-1", kind="plan",
+                       description="Essential 20GB — monthly plan", amount=D("45.00")),
+            BillCharge(charge_id="CH-1012P-2", kind="tax",
+                       description="Taxes and regulatory fees", amount=D("3.71")),
+        ], cycle=_PREVIOUS_CYCLE),
     ]
 
 
@@ -164,14 +239,19 @@ def build_policies() -> list[PolicyDocument]:
          "When a charge on a bill is wrong — a duplicate charge, a charge for a "
          "service after it was cancelled, or a charge at the wrong rate — the "
          "incorrect amount is credited in full once the evidence is on the bill "
-         "itself. Evidenced dispute credits are capped at $50 per bill; above "
-         "that the case goes to the billing team. The customer confirms the "
-         "credit before it is applied."),
+         "itself. Each disputed charge is decided on its own evidence, and the "
+         "dispute is recorded as a case with the decision for every line. "
+         "Evidenced dispute credits are capped at $50 per bill; above that the "
+         "case goes to the billing team with its record intact. The customer "
+         "confirms the credit before it is applied."),
         ("POL-BILL-02", "Goodwill credits", "billing",
          "When the bill is correct but the customer has had a poor experience, "
          "the agent may offer a goodwill credit of up to $25. The credit needs "
          "the customer's agreement and is applied to the next bill. Goodwill "
-         "credits are offered once per conversation."),
+         "credits are offered once per conversation, and no more than $50 of "
+         "goodwill may be credited to an account in any 90-day period — past "
+         "that, goodwill is refused, though an incorrect charge is still "
+         "credited in full under the dispute policy."),
         ("POL-BILL-03", "Reading your bill", "billing",
          "Every bill is itemised: the plan charge, device instalments, one-off "
          "charges, roaming, and taxes and regulatory fees are separate lines. "
@@ -272,6 +352,32 @@ def build_procedures() -> list[Procedure]:
     ]
 
 
+def _seed_credit_history(store) -> None:
+    """Executed credits from before 'now' — the trailing history the
+    goodwill policy reads. Ruth Callaghan (NB-1011) has already had
+    $50 of goodwill inside the window, the full rolling allowance;
+    the dates are pinned relative to the shared clock so the window
+    means the same thing whenever the book is seeded."""
+    from datetime import timedelta
+
+    from .clock import today
+    from .models import ActionKind, ActionRecord
+
+    for i, days_ago in enumerate((52, 18), start=1):
+        store.save_action(ActionRecord(
+            action_id=f"ACT-HIST-1011-{i}",
+            conversation_id="CONV-HIST-1011",
+            kind=ActionKind.APPLY_CREDIT,
+            summary="apply a goodwill credit of $25.00",
+            payload={"credit_class": "goodwill"},
+            amount=D("25.00"),
+            basis="Goodwill under POL-BILL-02; bill itself is correct.",
+            status="executed",
+            account_number="NB-1011",
+            created_date=(today() - timedelta(days=days_ago)).isoformat(),
+        ))
+
+
 def seed_store(store) -> dict:
     """Write the whole book into a store and embed the policy corpus.
     Returns counts for readiness/demo output."""
@@ -297,6 +403,7 @@ def seed_store(store) -> dict:
         store.set_embedding(doc.doc_id, embed(f"{doc.title}. {doc.text}"))
     for proc in procedures:
         store.save_procedure(proc)
+    _seed_credit_history(store)
     return {
         "plans": len(plans), "offers": len(offers), "customers": len(customers),
         "accounts": len(accounts), "bills": len(bills),
