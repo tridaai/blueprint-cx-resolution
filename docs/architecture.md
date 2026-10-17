@@ -73,8 +73,13 @@ Nodes, in turn order:
   unverified detours into the identity flow and re-asks the
   confirmation afterwards — verification never silently satisfies
   a confirmation given before it.
-- **route** — the phrase-table router; a live procedure owns short
-  outcome replies ("still nothing") that carry no routing signal.
+- **route** — the phrase-table router, read as evidence
+  (`routing.analyze`): matched signals, the leaders, the runner-up.
+  A live procedure owns short outcome replies ("still nothing")
+  that carry no routing signal. Two desks tied on a real signal
+  short-circuit to `post` with the supervisor's own clarifying
+  question — no desk is guessed, and no specialist runs that turn.
+  Every decision lands on the turn's audit event.
 - **specialist** — the desk runs (see below). One behaviour is the
   supervisor's own: on a first ask-for-a-human routed to the
   catch-all, the reply is a genuine solve attempt (an invitation
@@ -101,6 +106,47 @@ Nodes, in turn order:
 Conversation state lives in the store, not in graph memory: the
 API is stateless, the graph is invoked per turn over the loaded
 record, and any process can serve any turn.
+
+## Rerouting and clarification
+
+The conversation's **desk** is state of its own, distinct from the
+per-turn intent: the desk is the specialist that owns the
+conversation until a routed turn says otherwise. When a routed
+turn lands on a different desk — a billing chat that turns into a
+fault, a roaming question inside an account chat — the move is a
+**reroute**, written to the audit as an event of its own
+(from-desk, to-desk, trigger turn, the signals that caused it).
+What survives a reroute is everything that belongs to the
+conversation rather than the desk: the identity state (a verified
+customer is never asked to verify again because the topic moved),
+the message history and specialist findings so far, and the
+executed-action record.
+
+One thing deliberately does not survive: a proposal the old desk
+left awaiting its answer. The moment the desk changes, the
+pending proposal is retired — its record stays on the books as
+`superseded`, with the reason — and it can only ever run after
+being proposed again and confirmed again at the new desk. This
+closes the stale-yes hole in any design where confirmations are
+conversational: a "yes" spoken to the new desk's question can
+never be spent on the old desk's price.
+
+When the router cannot honestly separate two readings — exactly
+two desks tie at the top on a real signal (the threshold is in
+`routing.CLARIFY_MIN_SCORE`, and the care catch-all never takes
+part in a tie) — the supervisor asks **one** clarifying question
+offering the two readings in plain words ("your bill", "a fault
+with your service"), and holds the desk unchanged while it is
+open. The next routed turn answers it first: a reply that picks
+a reading (by signal, or by the words people name desks with)
+routes there, and the resolution counts as progress in the
+no-progress bookkeeping. A reply that settles nothing is
+committed on — the router takes its best reading, or hands the
+turn to care when there is nothing to read — and no second
+question is asked. Symmetrically, a turn with no clear signal at
+all (at most one weak phrase matched) routes to the care desk
+with `low_confidence_care` on its routing record, never to a
+transactional desk on a guess.
 
 ## The desks
 
@@ -180,11 +226,16 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 31 scripted
+The eval pack grades trajectories, not replies: 37 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
-the escalation queue). The rubrics encode the production rules:
+the escalation queue, the reroute audit count, action-record
+statuses). The trajectories include the round-2 desk discipline:
+a proposal retired by a reroute and never executed, verification
+surviving a change of desk, a clarification resolved by its
+answer and one ignored and committed on without a second
+question. The rubrics encode the production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
   stuck is a transfer; threat/fraud/legal/vulnerable are immediate.
@@ -229,10 +280,11 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes round 1 (core). The scheduled deepening —
-mid-conversation rerouting, dispute tiers, the retention flow,
-failure attribution and the annotation queue, conversation-signal
-extraction, the daily quality pass, the prompt registry, handoff
-scoring, cost budgets — is laid out in the blueprint backlog; the
-architecture above is shaped so each lands as a new node, desk
-behavior, or report over the same records, not as a rewrite.
+This document describes rounds 1–2 (core, then rerouting and
+clarification). The scheduled deepening — dispute tiers, the
+retention flow, failure attribution and the annotation queue,
+conversation-signal extraction, the daily quality pass, the
+prompt registry, handoff scoring, cost budgets — is laid out in
+the blueprint backlog; the architecture above is shaped so each
+lands as a new node, desk behavior, or report over the same
+records, not as a rewrite.

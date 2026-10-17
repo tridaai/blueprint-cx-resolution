@@ -8,9 +8,10 @@ rests on. Specialists never format the final reply and never
 execute anything; execution is actions.py, composition is the
 supervisor's, and both re-check the rules at their own moment.
 
-Happy paths only in this round (R1): the deepening of each desk —
-rerouting, dispute tiers, the full procedure engine, proration
-edge cases — is scheduled in the round map, not improvised here.
+The desks work their happy paths; their deepening — dispute
+tiers, the full procedure engine, proration edge cases — is
+scheduled in the round map, not improvised here. Rerouting
+between desks lives in the supervisor (round 2), not here.
 """
 
 from __future__ import annotations

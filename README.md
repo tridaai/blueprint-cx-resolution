@@ -132,6 +132,21 @@ open http://localhost:8000              # the operator console
   document retrieval returned for that turn; the composer enforces
   the citation in code after drafting. Account facts come only
   from tools.
+- **Rerouting** — a conversation can change desks mid-stream (a
+  billing chat that turns into a fault). The move is written to
+  the audit with its trigger turn; identity, context and the
+  executed-action history carry over untouched. A proposal the
+  old desk left awaiting an answer is retired in the move — it
+  can only ever run after being re-made and re-confirmed at the
+  new desk, so a stray "yes" to a later question can never fire
+  a stale action.
+- **Asking, not guessing** — when two desks tie on a real signal,
+  the agent asks one targeted clarifying question offering both
+  readings in plain words; if the customer doesn't answer it, the
+  router commits to its best reading and never asks twice. A
+  turn with no clear signal goes to the care desk, never to a
+  transactional desk on a guess. Every routing decision is
+  recorded with its matched signals and the runner-up intent.
 - **Screening** — customer text is screened for prompt injection
   before any model sees it; attempts are audit-logged and answered
   as ordinary service.
@@ -139,7 +154,7 @@ open http://localhost:8000              # the operator console
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **31 scripted multi-turn conversations** played by
+behavioral: **37 scripted multi-turn conversations** played by
 persona drivers (the refund seeker, the human-demander, the
 fragment writer, the AI skeptic, the confused elder, non-native
 phrasing) against the real service, graded with pass/fail rubric
@@ -147,17 +162,17 @@ assertions — escalation, education, grounding, transaction,
 identity, care. The gate requires **100% on zero-tolerance
 assertions** (escalation decisions, whether an action executed,
 exact money and identity state) and **≥95% overall**. Current
-state of the tree: 144/144 assertions, 89/89 zero-tolerance.
+state of the tree: 196/196 assertions, 109/109 zero-tolerance.
 
 ```bash
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (50 tests) covers the deterministic core —
+The pytest suite (60 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
-routing, store conformance across the SQLite and in-memory
-profiles (the PostgreSQL leg runs when `CX_TEST_DATABASE_URL`
-names a scratch database).
+routing, rerouting and clarification, store conformance across
+the SQLite and in-memory profiles (the PostgreSQL leg runs when
+`CX_TEST_DATABASE_URL` names a scratch database).
 
 ## Layout
 
@@ -169,7 +184,9 @@ src/cx_agent/
   escalation.py    the escalation rules + handoff packet builder
   identity.py      the verification state machine + code double
   actions.py       structured action execution behind the gates
-  routing.py       the deterministic intent router + classifiers
+  routing.py       the deterministic intent router, its recorded
+                   evidence (signals, runner-up), the clarification
+                   reads + the reply classifiers
   screening.py     prompt-injection and signal screening
   retrieval.py     policy-corpus retrieval (pgvector / JSON)
   documents.py     the deterministic hashing embedder (384-dim)
@@ -197,10 +214,10 @@ into the records themselves.
   per account so tests and evals can verify the flow. A production
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
-- Specialists are on their happy paths in this round. Mid-
-  conversation rerouting, deeper dispute tiers, retention flows
-  and the daily quality pass are designed (see
-  `docs/architecture.md`) and land in later rounds.
+- Specialists are still on their happy paths in places. Deeper
+  dispute tiers, retention flows and the daily quality pass are
+  designed (see `docs/architecture.md`) and land in later
+  rounds.
 - The offline fallback drafts competently from findings because
   the findings are written as sentences; it does not understand
   free-form customer language the way a model does. Routing and
