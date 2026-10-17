@@ -63,3 +63,30 @@ def test_escalation_queue_endpoint():
     queue = client.get("/escalations").json()["escalations"]
     assert len(queue) == 1
     assert queue[0]["packet"]["queue"] == "general"
+
+
+def test_callbacks_and_procedure_runs_endpoints():
+    client = TestClient(app)
+    client.post("/seed")
+    assert client.get("/callbacks").json() == {"callbacks": []}
+    assert client.get("/procedure-runs").json() == {"procedure_runs": []}
+    conv = client.post("/conversations").json()
+    cid = conv["conversation_id"]
+    for text in ("I have no signal at all", "no, still nothing",
+                 "nope, still no signal", "no, that didn't work either"):
+        client.post(f"/conversations/{cid}/messages", json={"text": text})
+    callbacks = client.get("/callbacks").json()["callbacks"]
+    assert len(callbacks) == 1
+    callback = callbacks[0]
+    assert callback["status"] == "proposed"
+    assert callback["procedure_id"] == "PROC-NOSIGNAL"
+    assert [s["step_id"] for s in callback["transcript"]] == [
+        "NS-1", "NS-2", "NS-3", "NS-4", "book_callback"]
+    detail = client.get(f"/callbacks/{callback['callback_id']}")
+    assert detail.status_code == 200
+    assert client.get("/callbacks/NOPE").status_code == 404
+    runs = client.get(
+        f"/procedure-runs?conversation_id={cid}").json()["procedure_runs"]
+    assert len(runs) == 1
+    assert runs[0]["state"] == "dead_ended"
+    assert runs[0]["procedure_version"] == 1

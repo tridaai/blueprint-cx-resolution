@@ -35,7 +35,13 @@ from cx_agent.store import InMemoryStore  # noqa: E402
 # wasn't) established".
 ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            "identity_state", "payment_method_last4", "executed_kinds",
-           "dispute_credit"}
+           "dispute_credit",
+           # Round 4: the procedure engine's record-keeping is held
+           # to the same standard — step order, callback presence
+           # and transcript contents are never a matter of degree.
+           "callbacks_count", "callback_status", "callback_transcript_steps",
+           "run_state", "run_current_step", "run_history_steps",
+           "run_safety_refusals"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -101,6 +107,10 @@ def check_final(service, scenario: dict, conv_id: str,
     audit = store.list_audit(conv_id)
     cases = store.list_dispute_cases(conversation_id=conv_id)
     case = cases[-1] if cases else None
+    callbacks = store.list_callbacks(conversation_id=conv_id)
+    callback = callbacks[-1] if callbacks else None
+    runs = store.list_procedure_runs(conversation_id=conv_id)
+    run = runs[-1] if runs else None
     values = {
         "status": conv.status if conv else None,
         "unhandled_logged": bool(conv and conv.unhandled_intent),
@@ -116,6 +126,16 @@ def check_final(service, scenario: dict, conv_id: str,
         "dispute_credit": str(case.credit_applied) if case else None,
         "dispute_decisions": ([line.decision for line in case.lines]
                               if case else []),
+        "callbacks_count": len(callbacks),
+        "callback_status": callback.status if callback else None,
+        "callback_procedure": callback.procedure_id if callback else None,
+        "callback_transcript_steps": ([s.step_id for s in callback.transcript]
+                                      if callback else []),
+        "run_state": run.state if run else None,
+        "run_current_step": run.current_step_id if run else None,
+        "run_history_steps": ([h.step_id for h in run.history]
+                               if run else []),
+        "run_safety_refusals": run.safety_refusals if run else 0,
     }
     for key, want in final.items():
         total += 1
