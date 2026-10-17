@@ -97,10 +97,13 @@ def check_final(service, scenario: dict, conv_id: str,
                    if e.conversation_id == conv_id]
     executed = sorted(a.kind.value for a in store.list_actions(conv_id)
                       if a.status == "executed")
+    audit = store.list_audit(conv_id)
     values = {
         "status": conv.status if conv else None,
         "unhandled_logged": bool(conv and conv.unhandled_intent),
         "escalation_queue": escalations[-1].queue if escalations else None,
+        "reroute_count": sum(1 for e in audit if e.kind == "reroute"),
+        "action_statuses": [a.status for a in store.list_actions(conv_id)],
         "executed_kinds": executed,
         "actions_count": len(store.list_actions(conv_id)),
         "balance_due": str(account.balance_due) if account else None,
