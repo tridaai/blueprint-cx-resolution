@@ -309,3 +309,43 @@ def test_care_records(kind, tmp_path):
     assert read_account.accessibility_note == \
         "send my letters in large print"
     assert read_account.preferred_contact == "large print"
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_attribution_and_annotation_records(kind, tmp_path):
+    """Round 10 records behave identically on every store:
+    attributions round-trip with their evidence dicts, keyed by
+    conversation, and annotations list in creation (seq) order,
+    filtered by conversation."""
+    from cx_agent.models import AnnotationRecord, AttributionRecord
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+
+    record = AttributionRecord(
+        conversation_id="CONV-T", outcome="escalated",
+        cause="policy_limit", rule="dispute_above_cap", desk="billing",
+        evidence={"reroutes": 0, "escalation_reason": "dispute_above_agent_cap"},
+        attributed_date="2026-10-01")
+    store.save_attribution(record)
+    assert store.get_attribution("CONV-T") == record
+    assert store.list_attributions() == [record]
+    assert store.get_attribution("CONV-NONE") is None
+    store.save_attribution(store.get_attribution("CONV-T"))
+    assert len(store.list_attributions()) == 1
+
+    second = AnnotationRecord(
+        annotation_id="ANN-T2", conversation_id="CONV-T", annotator="ben",
+        cause_correct=False, corrected_cause="routing_error",
+        note="bounced first", seq=2, created_date="2026-10-01")
+    first = AnnotationRecord(
+        annotation_id="ANN-T1", conversation_id="CONV-T", annotator="amy",
+        cause_correct=True, seq=1, created_date="2026-10-01")
+    store.save_annotation(second)  # saved out of order; reads sort by seq
+    store.save_annotation(first)
+    assert store.list_annotations("CONV-T") == [first, second]
+    assert store.list_annotations() == [first, second]
+    assert store.list_annotations("CONV-OTHER") == []
