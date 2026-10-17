@@ -245,7 +245,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (52 trajectories) + run_evals.py
+evals/             scenarios.jsonl (58 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```
