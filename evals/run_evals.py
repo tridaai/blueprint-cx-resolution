@@ -113,7 +113,18 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # experience, is exact or failed.
            "signal_interventions", "second_forms_used",
            "packet_signal_effort", "packet_signal_trend",
-           "packet_signal_interventions", "signal_last_rising"}
+           "packet_signal_interventions", "signal_last_rising",
+           # Round 14: a retention case's reason, its one save
+           # offer (proposed exactly once, from a real mechanism),
+           # the no-offers instruction, the outcome it settled
+           # into, its fault routing, and the cancellation date
+           # scheduled on the account are record state — exact
+           # or failed.
+           "retention_cases_count", "retention_reason",
+           "retention_outcome", "retention_state", "retention_routed",
+           "retention_no_offers", "retention_offer_proposals",
+           "retention_offer_mechanism", "retention_offer_outcome",
+           "pending_cancellation_effective"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -321,6 +332,30 @@ def check_final(service, scenario: dict, conv_id: str,
         i["kind"].split(":", 1)[1] for r in sig_records
         for i in r.interventions
         if i["kind"].startswith("second_form:")})
+    # Round 14: the retention case this conversation opened, and
+    # the save-offer proposals made under it (proposal records —
+    # the answer records beside them are the confirmation
+    # protocol's, not second offers).
+    rcases = store.list_retention_cases(conversation_id=conv_id)
+    rcase = rcases[-1] if rcases else None
+    values["retention_cases_count"] = len(rcases)
+    values["retention_reason"] = rcase.reason if rcase else None
+    values["retention_state"] = rcase.state if rcase else None
+    values["retention_outcome"] = rcase.outcome if rcase else None
+    values["retention_routed"] = rcase.routed if rcase else None
+    values["retention_no_offers"] = (
+        rcase.no_offers_requested if rcase else None)
+    values["retention_offer_mechanism"] = (
+        rcase.save_offer_mechanism if rcase else None)
+    values["retention_offer_outcome"] = (
+        rcase.save_offer_outcome if rcase else None)
+    values["retention_offer_proposals"] = sum(
+        1 for a in store.list_actions(conv_id)
+        if a.payload.get("retention_save_offer")
+        and a.status in ("proposed", "superseded"))
+    if scenario.get("account"):
+        values["pending_cancellation_effective"] = (
+            account.pending_cancellation_effective if account else None)
     packet = escalations[-1].packet if escalations else None
     values["packet_signal_effort"] = (
         packet.signals.get("effort_score") if packet else None)
