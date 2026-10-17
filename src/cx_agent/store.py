@@ -55,6 +55,8 @@ from .models import (
     DisputeCase,
     Escalation,
     FeedbackRecord,
+    Incident,
+    IncidentAct,
     Offer,
     PaymentArrangement,
     PaymentAttempt,
@@ -221,6 +223,14 @@ class Store(Protocol):
     def save_prompt_act(self, a: PromptAct) -> None: ...
     def list_prompt_acts(self, prompt_id: str | None = None
                          ) -> list[PromptAct]: ...
+    # the incident feed (round 15): governed known-issue records
+    # plus the append-only log of the operator acts on them
+    def save_incident(self, i: Incident) -> None: ...
+    def get_incident(self, incident_id: str) -> Incident | None: ...
+    def list_incidents(self) -> list[Incident]: ...
+    def save_incident_act(self, a: IncidentAct) -> None: ...
+    def list_incident_acts(self, incident_id: str | None = None
+                           ) -> list[IncidentAct]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
     def list_audit(self, conversation_id: str) -> list[AuditEvent]: ...
     def count_customers(self) -> int: ...
@@ -260,6 +270,8 @@ class InMemoryStore:
         self.prompt_entries: dict[str, PromptEntry] = {}
         self.prompt_pins: dict[str, PromptPin] = {}
         self.prompt_acts: dict[str, PromptAct] = {}
+        self.incidents: dict[str, Incident] = {}
+        self.incident_acts: dict[str, IncidentAct] = {}
         self.audit: list[AuditEvent] = []
 
     def _put(self, table: dict, key: str, model) -> None:
@@ -540,6 +552,23 @@ class InMemoryStore:
             rows = [a for a in rows if a.prompt_id == prompt_id]
         return sorted(rows, key=lambda a: a.seq)
 
+    def save_incident(self, i): self._put(self.incidents, i.incident_id, i)
+    def get_incident(self, incident_id):
+        return self._get(self.incidents, incident_id)
+
+    def list_incidents(self):
+        return sorted(self._all(self.incidents),
+                      key=lambda i: i.incident_id)
+
+    def save_incident_act(self, a):
+        self._put(self.incident_acts, a.act_id, a)
+
+    def list_incident_acts(self, incident_id=None):
+        rows = self._all(self.incident_acts)
+        if incident_id:
+            rows = [a for a in rows if a.incident_id == incident_id]
+        return sorted(rows, key=lambda a: a.seq)
+
     def save_audit(self, e):
         with self._lock:
             self.audit.append(copy.deepcopy(e))
@@ -586,6 +615,8 @@ _TABLES = {
     "prompt_entries": ("prompt_id", PromptEntry),
     "prompt_pins": ("prompt_id", PromptPin),
     "prompt_acts": ("act_id", PromptAct),
+    "incidents": ("incident_id", Incident),
+    "incident_acts": ("act_id", IncidentAct),
 }
 
 
@@ -885,6 +916,22 @@ class _SqlStore:
         rows = self._load_all("prompt_acts")
         if prompt_id:
             rows = [a for a in rows if a.prompt_id == prompt_id]
+        return sorted(rows, key=lambda a: a.seq)
+
+    def save_incident(self, i): self._save("incidents", i.incident_id, i)
+    def get_incident(self, incident_id):
+        return self._load("incidents", incident_id)
+
+    def list_incidents(self):
+        return sorted(self._load_all("incidents"),
+                      key=lambda i: i.incident_id)
+
+    def save_incident_act(self, a): self._save("incident_acts", a.act_id, a)
+
+    def list_incident_acts(self, incident_id=None):
+        rows = self._load_all("incident_acts")
+        if incident_id:
+            rows = [a for a in rows if a.incident_id == incident_id]
         return sorted(rows, key=lambda a: a.seq)
 
     def save_audit(self, e):

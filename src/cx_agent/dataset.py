@@ -32,6 +32,7 @@ from .models import (
     Bill,
     BillCharge,
     Customer,
+    Incident,
     Offer,
     Plan,
     PolicyDocument,
@@ -463,6 +464,57 @@ def build_procedures() -> list[Procedure]:
     ]
 
 
+def build_incidents() -> list[Incident]:
+    """The incident feed as seeded (round 15): the standing
+    known issues the operator's board opens with. Every scope
+    choice here is deliberate — the active broadband incident is
+    scoped to one postcode (02139, Elena Petrova's) whose
+    customer never reports that symptom anywhere else in the
+    book, the monitoring one to Tom Beckett's, and the
+    network-wide signal incident is already resolved, so the
+    seeded feed changes no other flow's behaviour: it is the
+    eval gate's control as much as its fixture."""
+    return [
+        Incident(
+            incident_id="INC-7001",
+            title="Broadband drops on the Northgate exchange",
+            service="broadband_drops",
+            affected_postcodes=["02139"],
+            symptom_signals=["broadband", "keeps dropping",
+                             "internet keeps dropping",
+                             "broadband keeps dropping", "dropping out"],
+            status="active", started_at="2026-10-01",
+            summary=("Some broadband lines served by the Northgate "
+                     "exchange are dropping repeatedly. Engineers are "
+                     "working at the exchange, and the fault is on "
+                     "our side, not your equipment."),
+            updated_date="2026-10-01"),
+        Incident(
+            incident_id="INC-7002",
+            title="Slow mobile data around the West Loop",
+            service="slow_data",
+            affected_postcodes=["60614"],
+            symptom_signals=["slow data", "data is slow",
+                             "internet is slow"],
+            status="monitoring", started_at="2026-09-30",
+            summary=("Mobile data speeds around the West Loop are "
+                     "lower than usual while a mast upgrade "
+                     "finishes. Speeds are being monitored."),
+            updated_date="2026-09-30"),
+        Incident(
+            incident_id="INC-7003",
+            title="Mobile signal outage — city-centre mast",
+            service="no_signal",
+            affected_postcodes=[],
+            symptom_signals=["no signal", "no service"],
+            status="resolved", started_at="2026-09-28",
+            summary=("A fault at a city-centre mast took mobile "
+                     "signal down for some customers. The mast has "
+                     "been repaired and signal is restored."),
+            updated_date="2026-09-29"),
+    ]
+
+
 def _seed_credit_history(store) -> None:
     """Executed credits from before 'now' — the trailing history the
     goodwill policy reads. Ruth Callaghan (NB-1011) has already had
@@ -548,6 +600,7 @@ def seed_store(store) -> dict:
     bills = build_bills()
     policies = build_policies()
     procedures = build_procedures()
+    incidents = build_incidents()
     for plan in plans:
         store.save_plan(plan)
     for offer in offers:
@@ -565,6 +618,13 @@ def seed_store(store) -> dict:
         store.set_embedding(doc.doc_id, embed(f"{doc.title}. {doc.text}"))
     for proc in procedures:
         store.save_procedure(proc)
+    for incident in incidents:
+        # Seeding writes the records it lacks and never overwrites
+        # one it has: an operator's update or resolution of a
+        # seeded incident survives a re-seed, as a prompt
+        # registry version does.
+        if store.get_incident(incident.incident_id) is None:
+            store.save_incident(incident)
     prompt_count = seed_registry(store)
     _seed_credit_history(store)
     _seed_roaming_history(store)
@@ -574,4 +634,5 @@ def seed_store(store) -> dict:
         "accounts": len(accounts), "bills": len(bills),
         "policies": len(policies), "procedures": len(procedures),
         "roaming_rates": len(rates), "prompts": prompt_count,
+        "incidents": len(incidents),
     }

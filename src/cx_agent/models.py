@@ -764,6 +764,14 @@ class HandoffPacket(BaseModel):
     # The human sees what it cost the customer to get here, not
     # just the facts of the case.
     signals: dict = Field(default_factory=dict)
+    # The known issues this conversation matched (round 15), read
+    # live from the incident feed at the moment of handoff: only
+    # incidents still active or monitoring ride the packet, each
+    # as the record states it (id, title, status, the operator's
+    # summary) — the human picks up a customer who was already
+    # told about a known fault, and sees exactly what they were
+    # told.
+    known_incidents: list[dict] = Field(default_factory=list)
 
 
 class Escalation(BaseModel):
@@ -773,6 +781,51 @@ class Escalation(BaseModel):
     queue: str
     packet: HandoffPacket
     turn: int
+
+
+class Incident(BaseModel):
+    """One known issue on the operator's incident feed (round 15)
+    — a governed record, not a rumour the model heard.
+
+    The feed is how the agent learns that a fault is already
+    known: an operator writes the record (or the dataset seeds
+    it), and deterministic matching in incidents.py decides
+    whether a customer's report is explained by it. `service` is
+    the troubleshooting vocabulary the procedures already use
+    (their `symptom` keys — no_signal, slow_data, wifi_calling,
+    broadband_drops), `affected_postcodes` scopes the issue to
+    areas (empty means every area), and `symptom_signals` are the
+    declared phrases a customer's report must carry for the
+    incident to explain it. `summary` is the operator's own
+    customer-safe wording: it is the only account of the issue
+    the agent may give, verbatim — the agent never invents a
+    cause or a fix time beyond this record. A `resolved` incident
+    no longer matches anything; `active` and `monitoring` do."""
+
+    incident_id: str
+    title: str
+    service: str = ""  # a procedure symptom key (incidents.SERVICES)
+    affected_postcodes: list[str] = Field(default_factory=list)
+    symptom_signals: list[str] = Field(default_factory=list)
+    status: str = "active"  # active | monitoring | resolved
+    started_at: str = ""  # ISO date the record states the issue began
+    summary: str = ""  # operator-written, customer-safe, served verbatim
+    updated_date: str = ""  # ISO date of the last operator act
+
+
+class IncidentAct(BaseModel):
+    """One recorded operator act on the incident feed: an
+    incident added, updated, or resolved. Append-only, `seq` in
+    store-wide creation order like the prompt registry's act log,
+    so the feed's history reads the same on every store."""
+
+    act_id: str
+    seq: int = 0
+    kind: str = ""  # add | update | resolve
+    incident_id: str = ""
+    actor: str = ""
+    note: str = ""
+    created_date: str = ""  # ISO date
 
 
 class PromptEntry(BaseModel):
