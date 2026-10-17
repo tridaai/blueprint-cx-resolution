@@ -45,6 +45,7 @@ from .models import (
     ActionRecord,
     AuditEvent,
     Bill,
+    CallbackRecord,
     Conversation,
     Customer,
     DisputeCase,
@@ -53,6 +54,7 @@ from .models import (
     Plan,
     PolicyDocument,
     Procedure,
+    ProcedureRun,
 )
 
 DEFAULT_SQLITE_PATH = "data/cx.db"
@@ -123,7 +125,17 @@ class Store(Protocol):
     def list_embeddings(self) -> list[tuple[str, list[float]]]: ...
     def save_procedure(self, p: Procedure) -> None: ...
     def get_procedure(self, procedure_id: str) -> Procedure | None: ...
+    def get_procedure_version(self, procedure_id: str,
+                              version: int) -> Procedure | None: ...
     def list_procedures(self) -> list[Procedure]: ...
+    def save_procedure_run(self, r: ProcedureRun) -> None: ...
+    def get_procedure_run(self, run_id: str) -> ProcedureRun | None: ...
+    def list_procedure_runs(self, conversation_id: str | None = None
+                            ) -> list[ProcedureRun]: ...
+    def save_callback(self, c: CallbackRecord) -> None: ...
+    def get_callback(self, callback_id: str) -> CallbackRecord | None: ...
+    def list_callbacks(self, conversation_id: str | None = None
+                       ) -> list[CallbackRecord]: ...
 
     # conversation records
     def save_conversation(self, c: Conversation) -> None: ...
@@ -155,6 +167,8 @@ class InMemoryStore:
         self.policies: dict[str, PolicyDocument] = {}
         self.embeddings: dict[str, list[float]] = {}
         self.procedures: dict[str, Procedure] = {}
+        self.procedure_runs: dict[str, ProcedureRun] = {}
+        self.callbacks: dict[str, CallbackRecord] = {}
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
@@ -215,9 +229,45 @@ class InMemoryStore:
         with self._lock:
             return [(k, list(v)) for k, v in self.embeddings.items()]
 
-    def save_procedure(self, p): self._put(self.procedures, p.procedure_id, p)
-    def get_procedure(self, procedure_id): return self._get(self.procedures, procedure_id)
-    def list_procedures(self): return self._all(self.procedures)
+    # Procedures are versioned data: rows key on id + version, the
+    # plain read returns the latest version, and a run pins the
+    # version it started on through get_procedure_version.
+    def save_procedure(self, p):
+        self._put(self.procedures, _procedure_key(p.procedure_id, p.version), p)
+
+    def get_procedure(self, procedure_id):
+        versions = [p for p in self._all(self.procedures)
+                    if p.procedure_id == procedure_id]
+        return max(versions, key=lambda p: p.version) if versions else None
+
+    def get_procedure_version(self, procedure_id, version):
+        return self._get(self.procedures, _procedure_key(procedure_id, version))
+
+    def list_procedures(self):
+        latest: dict[str, Procedure] = {}
+        for p in self._all(self.procedures):
+            current = latest.get(p.procedure_id)
+            if current is None or p.version > current.version:
+                latest[p.procedure_id] = p
+        return [latest[k] for k in sorted(latest)]
+
+    def save_procedure_run(self, r): self._put(self.procedure_runs, r.run_id, r)
+    def get_procedure_run(self, run_id): return self._get(self.procedure_runs, run_id)
+
+    def list_procedure_runs(self, conversation_id=None):
+        rows = self._all(self.procedure_runs)
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: r.run_id)
+
+    def save_callback(self, c): self._put(self.callbacks, c.callback_id, c)
+    def get_callback(self, callback_id): return self._get(self.callbacks, callback_id)
+
+    def list_callbacks(self, conversation_id=None):
+        rows = self._all(self.callbacks)
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: r.callback_id)
     def save_conversation(self, c): self._put(self.conversations, c.conversation_id, c)
     def get_conversation(self, cid): return self._get(self.conversations, cid)
     def list_conversations(self): return self._all(self.conversations)
@@ -268,11 +318,20 @@ _TABLES = {
     "bills": ("bill_id", Bill),
     "policies": ("doc_id", PolicyDocument),
     "procedures": ("procedure_id", Procedure),
+    "procedure_runs": ("run_id", ProcedureRun),
+    "callbacks": ("callback_id", CallbackRecord),
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
     "escalations": ("escalation_id", Escalation),
 }
+
+
+def _procedure_key(procedure_id: str, version: int) -> str:
+    """The row key for one version of a procedure. The procedures
+    table's key column holds `id:vN`, so versions coexist and the
+    latest is a read-time choice, never an overwrite."""
+    return f"{procedure_id}:v{version}"
 
 
 class _SqlStore:
@@ -343,9 +402,42 @@ class _SqlStore:
     def save_policy(self, d): self._save("policies", d.doc_id, d)
     def get_policy(self, doc_id): return self._load("policies", doc_id)
     def list_policies(self): return self._load_all("policies")
-    def save_procedure(self, p): self._save("procedures", p.procedure_id, p)
-    def get_procedure(self, procedure_id): return self._load("procedures", procedure_id)
-    def list_procedures(self): return self._load_all("procedures")
+    def save_procedure(self, p):
+        self._save("procedures", _procedure_key(p.procedure_id, p.version), p)
+
+    def get_procedure(self, procedure_id):
+        versions = [p for p in self._load_all("procedures")
+                    if p.procedure_id == procedure_id]
+        return max(versions, key=lambda p: p.version) if versions else None
+
+    def get_procedure_version(self, procedure_id, version):
+        return self._load("procedures", _procedure_key(procedure_id, version))
+
+    def list_procedures(self):
+        latest: dict[str, Procedure] = {}
+        for p in self._load_all("procedures"):
+            current = latest.get(p.procedure_id)
+            if current is None or p.version > current.version:
+                latest[p.procedure_id] = p
+        return [latest[k] for k in sorted(latest)]
+
+    def save_procedure_run(self, r): self._save("procedure_runs", r.run_id, r)
+    def get_procedure_run(self, run_id): return self._load("procedure_runs", run_id)
+
+    def list_procedure_runs(self, conversation_id=None):
+        rows = self._load_all("procedure_runs")
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: r.run_id)
+
+    def save_callback(self, c): self._save("callbacks", c.callback_id, c)
+    def get_callback(self, callback_id): return self._load("callbacks", callback_id)
+
+    def list_callbacks(self, conversation_id=None):
+        rows = self._load_all("callbacks")
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        return sorted(rows, key=lambda r: r.callback_id)
     def save_conversation(self, c): self._save("conversations", c.conversation_id, c)
     def get_conversation(self, cid): return self._load("conversations", cid)
     def list_conversations(self): return self._load_all("conversations")

@@ -81,6 +81,11 @@ class Account(BaseModel):
     payment_method_last4: str | None = None
     roaming_country: str | None = None  # set while the customer travels
     roaming_gb_used: Decimal = Decimal("0")
+    # What the network-side diagnostic tools read for this account
+    # (e.g. {"line_test": "fault_found"}). Absent a reading, a tool
+    # reports its neutral result — the book states facts, tools
+    # never invent them.
+    diagnostics: dict[str, str] = Field(default_factory=dict)
     cycle_day: int = 11  # days elapsed in the current cycle (of 30)
     cycle_days: int = 30
     open_case: str | None = None
@@ -94,17 +99,138 @@ class PolicyDocument(BaseModel):
 
 
 class ProcedureStep(BaseModel):
+    """One step of a troubleshooting procedure, as data.
+
+    The walker (procedures.py) interprets the step by `kind`;
+    changing any of this in the stored record changes the walk
+    without touching code:
+
+    - **instruction** — the customer does something and reports the
+      outcome (success / fail / unclear, classified in code).
+      `check` names the condition their report is about; a check
+      that *is* the symptom disappearing resolves the walk on
+      success. `on_fail` says where a failure goes:
+      next | escalate | callback.
+    - **tool_check** — the agent tests a condition itself, as a
+      tool (`check` names the tool). The tool's result selects the
+      path through `branches` (result → step_id), falling back to
+      the next step.
+    - **measurement** — the customer reports a value (a speed
+      test, a signal reading). The value is parsed and compared
+      against `threshold` in code: below goes to `below_step`,
+      at-or-above to `at_or_above_step`.
+    - **branch** — the next step is chosen by a named rule
+      (`rule`) over the run's recorded results; `branches` maps
+      the rule's answer to a step_id.
+    - **terminal** — the walk ends here: `outcome` is
+      resolved | book_callback | escalate_field_visit.
+
+    A step flagged `mandatory_safety` can never be skipped: a
+    skip attempt — or an outright refusal — is refused in code,
+    recorded on the run, and a second insistence escalates.
+    """
+
     step_id: str
-    instruction: str
-    check: str  # the condition the tool tests, e.g. "signal_restored"
-    on_fail: str  # next | escalate | callback
+    kind: str = "instruction"  # instruction | tool_check | measurement
+    #                            | branch | terminal
+    instruction: str = ""  # what the customer is told / asked
+    check: str = ""  # the condition tested, e.g. "signal_restored"
+    on_fail: str = "next"  # next | escalate | callback (instruction steps)
+    # measurement steps
+    metric: str = ""  # e.g. "download_mbps"
+    unit: str = ""  # e.g. "Mbps"
+    threshold: Decimal | None = None
+    below_step: str | None = None
+    at_or_above_step: str | None = None
+    # branch steps (and tool_check path selection)
+    rule: str = ""  # named rule over the run's results (procedures.RULES)
+    branches: dict[str, str] = Field(default_factory=dict)  # answer → step_id
+    # terminal steps
+    outcome: str = ""  # resolved | book_callback | escalate_field_visit
+    mandatory_safety: bool = False
+    next_step: str | None = None  # explicit successor; default: following step
 
 
 class Procedure(BaseModel):
+    """A troubleshooting procedure as a versioned data record.
+
+    Procedures are stored per version (`procedure_id` + `version`);
+    a run pins the version it started on, so editing the data
+    mid-flight never moves a customer who is already walking it.
+    """
+
     procedure_id: str
+    version: int = 1
     title: str
     symptom: str  # router key
+    # The phrases in a customer message that name this symptom —
+    # data, like everything else about the procedure.
+    symptom_phrases: list[str] = Field(default_factory=list)
+    # The walk needs the account before it can start (its tools
+    # test the line): the desk asks for identity first.
+    requires_account: bool = False
     steps: list[ProcedureStep] = Field(default_factory=list)
+
+
+class StepRecord(BaseModel):
+    """One entry in a procedure run's history: a step as it
+    actually happened — the tool's result, the customer's outcome,
+    the value they reported, the branch taken. This is the
+    transcript a callback or field visit is booked with."""
+
+    step_id: str
+    kind: str  # instruction | tool_check | measurement | branch
+    #          | terminal | safety_refusal
+    detail: str = ""  # the check / metric / rule the step turned on
+    result: str = ""  # tool result | success | fail | reported value
+    #                 | branch answer | terminal outcome
+    turn: int = 0
+
+
+class ProcedureRun(BaseModel):
+    """An in-flight (or finished) procedure walk, as a record of
+    its own — the procedure-side sibling of the dispute case.
+
+    The conversation's specialist state holds only the run's id;
+    the run itself lives in the store with its full step history,
+    so leaving the conversation and coming back resumes at the
+    exact step, and finishing hands the history to whoever picks
+    the case up (callback, field visit, escalation packet).
+    """
+
+    run_id: str
+    conversation_id: str
+    account_number: str = ""
+    procedure_id: str
+    procedure_version: int = 1
+    state: str = "active"  # active | resolved | dead_ended | abandoned
+    current_step_id: str = ""  # the step awaiting the customer, when active
+    history: list[StepRecord] = Field(default_factory=list)
+    safety_refusals: int = 0
+    outcome: str = ""  # resolved | callback_booked | field_visit
+    #                  | safety_escalation | conversation_escalated
+    created_date: str = ""  # ISO date
+    updated_date: str = ""
+
+
+class CallbackRecord(BaseModel):
+    """A technician callback as a first-class record — not a
+    by-product of a chat. Created the moment a procedure dead-ends,
+    carrying the run's full step transcript, and settled when the
+    customer answers the booking proposal (booked / declined /
+    blocked at execution), exactly as a dispute case settles."""
+
+    callback_id: str
+    conversation_id: str
+    account_number: str = ""
+    procedure_id: str
+    procedure_version: int = 1
+    run_id: str = ""
+    reason: str = ""  # why the procedure dead-ended, in plain words
+    status: str = "proposed"  # proposed | booked | declined | blocked
+    transcript: list[StepRecord] = Field(default_factory=list)
+    action_id: str = ""  # the executed book_callback action, once booked
+    created_date: str = ""  # ISO date
 
 
 # ---------------------------------------------------------------------------

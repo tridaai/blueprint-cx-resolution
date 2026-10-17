@@ -95,7 +95,11 @@ def build_accounts() -> list[Account]:
         Account(account_number="NB-1004", customer_id="CUST-004", plan_id="PLAN-ESS",
                 balance_due=D("45.00"), payment_method_last4="7781", cycle_day=7),
         Account(account_number="NB-1005", customer_id="CUST-005", plan_id="PLAN-ESS",
-                balance_due=D("76.77"), payment_method_last4="5150", cycle_day=14),
+                balance_due=D("76.77"), payment_method_last4="5150", cycle_day=14,
+                # The network-side line test finds a fault on Grace's
+                # line: her broadband procedure branches straight to
+                # a field visit, by the book.
+                diagnostics={"line_test": "fault_found"}),
         Account(account_number="NB-1006", customer_id="CUST-006", plan_id="PLAN-ESS",
                 balance_due=D("61.10"), payment_method_last4="6602", cycle_day=19),
         Account(account_number="NB-1007", customer_id="CUST-007", plan_id="PLAN-ESS",

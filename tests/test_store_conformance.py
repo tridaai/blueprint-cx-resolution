@@ -110,3 +110,63 @@ def test_bill_history_and_dispute_cases(kind, tmp_path):
     assert store.list_dispute_cases(account_number="NB-T")[0].case_id == "DSP-T1"
     assert store.list_dispute_cases(account_number="NB-OTHER") == []
     assert store.get_dispute_case("DSP-NONE") is None
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_procedure_versions_runs_and_callbacks(kind, tmp_path):
+    """Round 4 records behave identically on every store: procedures
+    are versioned data (the plain read is the latest, a pinned read
+    is exact, the list shows one row per procedure), and procedure
+    runs and callback records round-trip with their transcripts."""
+    from cx_agent.models import (
+        CallbackRecord,
+        Procedure,
+        ProcedureRun,
+        ProcedureStep,
+        StepRecord,
+    )
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+
+    v1 = Procedure(procedure_id="PROC-T", version=1, title="Test",
+                   symptom="test",
+                   steps=[ProcedureStep(step_id="T-1", instruction="one")])
+    v2 = Procedure(procedure_id="PROC-T", version=2, title="Test",
+                   symptom="test",
+                   steps=[ProcedureStep(step_id="T-1", instruction="one, revised")])
+    store.save_procedure(v1)
+    store.save_procedure(v2)
+    assert store.get_procedure("PROC-T").version == 2
+    assert store.get_procedure_version("PROC-T", 1).steps[0].instruction == "one"
+    assert store.get_procedure_version("PROC-T", 3) is None
+    assert [p.procedure_id for p in store.list_procedures()] == ["PROC-T"]
+
+    history = [StepRecord(step_id="T-1", kind="tool_check",
+                          detail="line_test", result="fault_found", turn=2)]
+    run = ProcedureRun(run_id="RUN-T1", conversation_id="CONV-T",
+                       account_number="NB-T", procedure_id="PROC-T",
+                       procedure_version=1, state="dead_ended",
+                       history=history, outcome="field_visit",
+                       created_date="2026-10-20", updated_date="2026-10-20")
+    store.save_procedure_run(run)
+    loaded_run = store.get_procedure_run("RUN-T1")
+    assert loaded_run.state == "dead_ended"
+    assert loaded_run.history[0].result == "fault_found"
+    assert store.list_procedure_runs(conversation_id="CONV-T")[0].run_id == "RUN-T1"
+    assert store.list_procedure_runs(conversation_id="CONV-OTHER") == []
+    assert store.get_procedure_run("RUN-NONE") is None
+
+    callback = CallbackRecord(
+        callback_id="CBK-T1", conversation_id="CONV-T",
+        account_number="NB-T", procedure_id="PROC-T", procedure_version=1,
+        run_id="RUN-T1", reason="steps exhausted", status="proposed",
+        transcript=history, created_date="2026-10-20")
+    store.save_callback(callback)
+    loaded_cb = store.get_callback("CBK-T1")
+    assert loaded_cb.transcript[0].step_id == "T-1"
+    assert store.list_callbacks(conversation_id="CONV-T")[0].callback_id == "CBK-T1"
+    assert store.list_callbacks() != []
+    assert store.get_callback("CBK-NONE") is None
