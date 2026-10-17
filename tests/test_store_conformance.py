@@ -433,6 +433,46 @@ def test_retention_cases(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_incident_feed_and_act_log(kind, tmp_path):
+    """Round 15 records behave identically on every store: an
+    incident round-trips with its scope and declared signals,
+    the feed lists in id order, and the act log lists in seq
+    order, filtered by incident."""
+    from cx_agent.models import Incident, IncidentAct
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+
+    record = Incident(
+        incident_id="INC-T1", title="Signal down — West Loop",
+        service="no_signal", affected_postcodes=["60614"],
+        symptom_signals=["no signal", "no service"],
+        status="active", started_at="2026-10-01",
+        summary="Signal is down around the West Loop.",
+        updated_date="2026-10-01")
+    store.save_incident(record)
+    assert store.get_incident("INC-T1") == record
+    assert store.get_incident("INC-NONE") is None
+    ids = [i.incident_id for i in store.list_incidents()]
+    assert ids == sorted(ids) and "INC-T1" in ids
+
+    second = IncidentAct(act_id="IACT-T2", seq=2, kind="resolve",
+                         incident_id="INC-T1", actor="ops",
+                         created_date="2026-10-01")
+    first = IncidentAct(act_id="IACT-T1", seq=1, kind="add",
+                        incident_id="INC-T1", actor="ops",
+                        created_date="2026-10-01")
+    store.save_incident_act(second)  # saved out of order; reads sort by seq
+    store.save_incident_act(first)
+    assert store.list_incident_acts("INC-T1") == [first, second]
+    assert store.list_incident_acts() == [first, second]
+    assert store.list_incident_acts("INC-OTHER") == []
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
 def test_quality_digests(kind, tmp_path):
     """Round 12 records behave identically on every store: one
     digest per date, listed in date order, and saving a digest

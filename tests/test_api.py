@@ -127,6 +127,73 @@ def test_complaint_feedback_and_mining_endpoints():
     assert mining["candidates"] == []  # one utterance is no cluster
 
 
+def test_incident_feed_endpoints():
+    client = TestClient(app)
+    client.post("/seed")
+    feed = client.get("/incidents").json()["incidents"]
+    assert [i["incident_id"] for i in feed] == ["INC-7001", "INC-7002",
+                                                "INC-7003"]
+    assert feed[0]["status"] == "active"
+    assert feed[0]["affected_postcodes"] == ["02139"]
+    active = client.get("/incidents?status=active").json()["incidents"]
+    assert [i["incident_id"] for i in active] == ["INC-7001"]
+    one = client.get("/incidents/INC-7001")
+    assert one.status_code == 200 and one.json()["acts"] == []
+    assert client.get("/incidents/INC-NOPE").status_code == 404
+
+    # The operator acts: add, update, resolve — each recorded.
+    added = client.post("/incidents", json={
+        "incident_id": "INC-9001", "title": "Signal down — West Loop",
+        "service": "no_signal",
+        "summary": "Signal is down around the West Loop.",
+        "symptom_signals": ["no signal"], "affected_postcodes": ["60614"],
+        "actor": "ops"})
+    assert added.status_code == 200
+    assert added.json()["status"] == "active"
+    duplicate = client.post("/incidents", json={
+        "incident_id": "INC-9001", "title": "again", "service": "no_signal",
+        "summary": "x", "symptom_signals": ["no signal"]})
+    assert duplicate.status_code == 400
+    bad = client.post("/incidents", json={
+        "title": "bad service", "service": "billing", "summary": "x",
+        "symptom_signals": ["bill"]})
+    assert bad.status_code == 400
+    updated = client.post("/incidents/INC-9001/update", json={
+        "summary": "Signal is down across the West Loop.",
+        "actor": "ops"})
+    assert updated.status_code == 200
+    assert updated.json()["summary"] == \
+        "Signal is down across the West Loop."
+    assert client.post("/incidents/INC-NOPE/update",
+                       json={"summary": "x"}).status_code == 404
+    resolved = client.post("/incidents/INC-9001/resolve",
+                           json={"actor": "ops"})
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "resolved"
+    assert client.post("/incidents/INC-9001/resolve",
+                       json={}).status_code == 400  # already resolved
+    detail = client.get("/incidents/INC-9001").json()
+    assert [a["kind"] for a in detail["acts"]] == ["add", "update",
+                                                   "resolve"]
+
+    # A conversation's matches ride their own view.
+    conv = client.post("/conversations").json()
+    cid = conv["conversation_id"]
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "my broadband keeps dropping"})
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "NB-1007 postcode 02139"})
+    from cx_agent.identity import expected_code
+
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": expected_code("NB-1007")})
+    matches = client.get(f"/conversations/{cid}/incidents").json()
+    assert [m["incident_id"] for m in matches["matches"]] == ["INC-7001"]
+    assert "broadband" in matches["matches"][0]["matched_signals"]
+    assert matches["matches"][0]["current_status"] == "active"
+    assert client.get("/conversations/NOPE/incidents").status_code == 404
+
+
 def test_retention_endpoints():
     client = TestClient(app)
     client.post("/seed")
