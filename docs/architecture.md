@@ -169,7 +169,7 @@ transactional desk on a guess.
 |---|---|---|
 | billing | bill history, dispute cases, credit policy + trailing credit history | `apply_credit` (dispute or goodwill class) |
 | roaming | account roaming state, rate table, usage profile, offer catalogue, fair-use notices | `activate_offer` (Roam Pass) |
-| offers | plan catalogue, loyalty offer, cycle calendar, change history | `change_plan` (and its reversal) |
+| offers | plan catalogue, loyalty offer, cycle calendar, change history, retention cases | `change_plan` (and its reversal), `cancel_account`, a save offer (`change_plan` or `apply_credit`) |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
 | account | account record, balance, attempt log, arrangements, processor double, autopay state | `update_payment_method`, `payment_arrangement`, `take_payment`, `refund_payment`, `set_autopay` |
 | care | policy corpus retrieval, complaint records + SLA watch, feedback records, the account's accessibility record | — (answers, records, or logs an unhandled intent) |
@@ -419,6 +419,80 @@ proposal time. Outside the window the desk escalates to the
 offers queue with the change record attached; the agent does not
 improvise a reversal policy won't cover.
 
+## Retention
+
+Round 14 gives the offers desk the leaving conversation
+(`retention_book.py`), built around the machinery that was
+already there — the plan-change transactions price its
+downgrade offers, the billing book's goodwill policy bounds
+its credits, the loyalty offer is the catalogue's own, and a
+fault-blamed exit follows the same billing dispute path a
+fault-blamed downgrade has followed since round 5. Nothing
+about retention is a parallel universe.
+
+**The case is a record.** Expressing intent to cancel (the
+router scores the leaving phrases to the offers desk; the
+account desk keeps its own cancellations — autopay, a
+scheduled change) opens a `RetentionCase` once the account is
+known: the reason classified deterministically against a
+governed list (price, coverage, service quality, moving
+house, competitor, no longer needed, other — first matching
+class in code order), the customer's words verbatim, whether
+they asked for no offers, and a count of their cancel
+requests. Every later step writes onto that record.
+
+**The save offer is one, policy-bound and real.** At most one
+counter-offer per case, ever — the single-counter rule is
+enforced when the offer is assembled (a case carrying an
+offer in any state assembles no second one) and re-checked in
+`actions.execute` (an executed save offer for the case blocks
+any other). The offer is assembled from mechanisms already in
+the book, chosen by the recorded reason: price reads a
+downgrade to the cheapest cheaper plan, priced by
+`plan_changes.quote_change` and scheduled at the cycle
+boundary; service quality and coverage read a goodwill credit
+under POL-BILL-02 (its caps and rolling history apply
+unchanged); a competitor (or an unclassifiable) reason reads
+the loyalty upgrade price where the customer is eligible;
+no-longer-needed reads the downgrade first. A reason no
+mechanism honestly answers — moving house — gets no offer,
+and the desk says so rather than inventing a discount. The
+offer goes through the normal propose → confirm → execute
+gate, and the case settles from the action's outcome.
+
+**No dark patterns, in code.** A customer who says they want
+no offers ("just cancel it", "don't try to keep me") gets
+none: the instruction is recorded on the case and the flow
+goes straight to the cancellation. Declining the save offer
+does the same — the supervisor records the decline, proposes
+the cancellation in the same reply, and the offer is never
+repeated, rephrased or replaced. A second explicit cancel
+request at any point ends retention: at the desk it is counted
+on the case and answered with the cancellation, and a
+customer who answers the cancellation proposal by saying
+"cancel" again is confirming it, not declining it — the
+confirmation classifier's reading is overridden for exactly
+that pending kind. The cancellation itself is a new action
+kind, `cancel_account`, behind the same identity +
+confirmation gates as every consequential action: executing
+it writes the cycle-boundary date onto the account as its
+pending cancellation (the pending-plan machinery's shape —
+the live account does not change today, a scheduled plan
+change is superseded), and the case closes as cancelled with
+that date.
+
+**Outcomes and the report.** A case settles into exactly one
+outcome: `saved_accepted_offer`, `cancelled`, or
+`escalated_retention_team` — the last is the path for the
+cases policy puts with humans, which in this book is the
+fault-blamed exit: it escalates to the billing queue through
+the dispute path, and the case records that routing
+(`routed = billing_dispute_path`). `retention_report` counts
+from the case records only — cases by reason, offers made /
+accepted / declined, the save rate over decided cases,
+cancellations completed — and is served on the API, the CLI
+and the console like every other case book's report.
+
 ## The troubleshooting engine
 
 Procedures are versioned data (`dataset.build_procedures`), and
@@ -523,12 +597,12 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 135 scripted
+The eval pack grades trajectories, not replies: 141 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
 the escalation queue, the reroute audit count, action-record
-statuses). Eighty-nine are hand-written; the rest are generated
+statuses). Ninety-five are hand-written; the rest are generated
 and attacked (round 9, below). The report breaks the results
 down by rubric, by persona, and by adversarial class, so a
 regression localises to a customer style or an attack type. The trajectories include the round-2 desk discipline:
@@ -595,6 +669,18 @@ declined and never repeated; the identity-effort offer,
 accepted and lapsed; second forms reached by stated confusion
 and by a repeated question; the packet's signal summary asserted
 field by field; and a calm negative control that fires nothing.
+Round 14 adds the retention trajectories: a price case saved by
+the priced downgrade with the plan and money exact; a declined
+offer going straight to the cancellation with the offer proposed
+exactly once; a no-offers instruction honoured with zero offers
+proposed (zero-tolerance as a scenario); a second insistence
+completing the cancellation — including saying "cancel" to the
+cancellation proposal itself (also zero-tolerance); a
+fault-blamed exit escalated to billing with its routing on the
+case; and a house move cancelled with no invented offer. The
+case's reason, outcome, offer count and mechanism, and the
+cancellation date scheduled on the account are zero-tolerance
+final-state assertions.
 The rubrics encode the production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
@@ -618,6 +704,12 @@ The rubrics encode the production rules:
   answered as recorded; second forms land on confusion; the
   packet carries the experience summary; a calm conversation
   fires nothing.
+- **retention** — the case opens with its governed reason and
+  the customer's words; one save offer at most, from a real
+  mechanism, priced exactly; no offers means none; a decline
+  or a second ask completes the cancellation at the cycle
+  boundary; a fault-blamed exit goes to billing with the
+  routing on the case.
 
 Zero-tolerance assertions (escalation decisions, action
 execution, money/plan state, identity state, and the procedure
@@ -832,7 +924,7 @@ surfaces:
   desk. The bill's second form is not an entry: it is composed
   from the customer's own figures at runtime, a deterministic
   template, and is classified as one.
-- **policy** — the sixteen corpus documents. `dataset.py`
+- **policy** — the seventeen corpus documents. `dataset.py`
   builds the `PolicyDocument` records from the registry texts
   (one wording, two shapes of record), and activating a new
   policy version rewrites the corpus document and re-embeds it,
@@ -899,15 +991,15 @@ an instruction to a model; it is code, reviewed as code.
 
 ## Round map
 
-This document describes rounds 1–13 (core; rerouting and
+This document describes rounds 1–14 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
-pass; the prompt registry and its lint). The scheduled
-deepening — the retention flow, handoff scoring, cost
-budgets — is laid out in the blueprint backlog; the
+pass; the prompt registry and its lint; the retention flow).
+The scheduled deepening — known-issue awareness, continuity,
+handoff scoring, cost budgets — is laid out in the blueprint backlog; the
 architecture above is shaped so each lands as a new node,
 desk behavior, or report over the same records, not as a
 rewrite.

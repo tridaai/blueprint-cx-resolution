@@ -125,6 +125,27 @@ open http://localhost:8000              # the operator console
   proration. A change can be reversed the same day it was made;
   a downgrade blamed on a fault is routed to the billing desk's
   dispute path, not priced as an exit.
+- **Retention** — wanting to leave opens a case: the reason
+  classified in code against a governed list (price, coverage,
+  service quality, moving house, competitor, no longer needed,
+  other), the customer's words kept verbatim. At most one save
+  offer per case, ever, and built only from mechanisms already
+  in the book — a downgrade priced by the plan-change
+  machinery, a goodwill credit under the credit policy, or the
+  loyalty upgrade price where the customer is eligible — and
+  none at all when the customer says they want none, or when
+  no mechanism honestly answers the reason (a house move gets
+  no invented discount). Declining the offer, or asking to
+  cancel a second time, goes straight to the cancellation:
+  a confirmed action that takes effect at the end of the
+  cycle, so the customer keeps what they paid for until then.
+  A fault-blamed exit follows the billing desk's dispute path
+  with the routing recorded on the case, and the cases policy
+  puts with humans settle as escalated to the retention team.
+  The report (`cx-agent retention-report`, `GET
+  /retention/report`) counts cases by reason, offers made and
+  accepted, the save rate over decided cases, and
+  cancellations completed — from the case records only.
 - **Technical support** — guided procedures as versioned data,
   walked by one engine: agent-side checks (coverage, allowance,
   a network line test) run as tools whose results branch the
@@ -285,7 +306,7 @@ The texts the agent works under are data with versions, in a
 **prompt registry** (`prompts.py`): the compose instructions
 the supervisor drafts under and the template the facts are
 poured into, the router's classification prompt, the second
-explanation forms, and the policy documents themselves — 27
+explanation forms, and the policy documents themselves — 28
 governed texts, seeded with the book and stored per version.
 The active version is the highest unless an operator pins
 another; a change is a new version, old versions stay readable
@@ -392,10 +413,10 @@ code, never instructions to a model.
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **135 scripted multi-turn conversations** played
+behavioral: **141 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care, attribution, signals. Eighty-nine are hand-written persona trajectories
+identity, care, attribution, signals, retention. Ninety-five are hand-written persona trajectories
 (the refund seeker, the human-demander, the fragment writer, the
 AI skeptic, the confused elder, non-native phrasing). Thirty-five
 more are the **persona matrix**: seven difficult-customer
@@ -411,7 +432,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1178/1178 assertions, 899/899 zero-tolerance. The
+the tree: 1272/1272 assertions, 978/978 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -421,10 +442,12 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (287 tests) covers the deterministic core —
+The pytest suite (307 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
-transactions, care records and the mining pass, failure
+transactions, the retention flow (the case record, the one
+policy-bound save offer, the no-dark-pattern rules, the
+cycle-end cancellation), care records and the mining pass, failure
 attribution and the annotation queue, the confirmation
 re-ask regressions, the prompt registry and its lint, store
 conformance across the SQLite and in-memory profiles (the
@@ -456,6 +479,11 @@ src/cx_agent/
   care_book.py     the care ledger: complaint records + the SLA
                    watch, feedback records, accessibility on the
                    account
+  retention_book.py the retention ledger: cancellation-intent
+                   cases (governed reasons, words verbatim), the
+                   one policy-bound save offer assembled from real
+                   mechanisms, the no-dark-pattern rules, the
+                   cycle-end cancellation, the retention report
   mining.py        the unhandled-intent mining pass: clusters
                    the conversations that ended unhandled into
                    candidate intents (a report; creates nothing)
@@ -494,7 +522,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (79 trajectories) + personas.py
+evals/             scenarios.jsonl (95 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite
@@ -513,8 +541,9 @@ into the records themselves.
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
 - Specialists are still on their happy paths in places.
-  Retention flows are designed (see `docs/architecture.md`)
-  and land in later rounds.
+  The later deepening — known-issue awareness, continuity
+  across conversations, handoff scoring — is still to come
+  (see the round map in `docs/architecture.md`).
 - The offline fallback drafts competently from findings because
   the findings are written as sentences; it does not understand
   free-form customer language the way a model does. Routing and
