@@ -1,0 +1,142 @@
+"""Environment-driven configuration.
+
+One decision lives here and nowhere else: which store profile is
+running (`store_profile`). `DATABASE_URL` set means PostgreSQL +
+pgvector (production); otherwise a single SQLite file is the local
+default. The LLM backend resolves the same way — the first configured
+provider wins under `auto`, and with no provider configured the
+labelled offline fallback drafts from structured findings so the
+whole system still runs (and the eval gate still means something)
+with no key at all.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from decimal import Decimal
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+def store_profile() -> tuple[str, str]:
+    """(kind, target): ("postgres", dsn) or ("sqlite", path)."""
+    dsn = _env("DATABASE_URL")
+    if dsn:
+        return "postgres", dsn
+    return "sqlite", _env("SQLITE_PATH", "data/cx.db")
+
+
+@dataclass(frozen=True)
+class Policy:
+    """The governed thresholds. Every number a rule depends on is
+    named here (and overridable by env), never buried in a prompt."""
+
+    # A credit the agent may propose on its own authority when the
+    # customer is unhappy but the bill is correct.
+    goodwill_credit_cap: Decimal = Decimal("25.00")
+    # A credit backed by evidence on the bill itself (duplicate
+    # charge, charge after cancellation, wrong rate). Above this the
+    # case escalates to the billing team instead of being credited.
+    dispute_credit_cap: Decimal = Decimal("50.00")
+    # Roaming fair-use ceiling per trip, in GB, from the roaming
+    # policy corpus. Past it the agent must warn before selling more.
+    roaming_fair_use_gb: int = 25
+    # Unproductive turns in a row before the conversation escalates.
+    max_no_progress_turns: int = 3
+    # One-time-code attempts before verification locks.
+    otp_max_attempts: int = 3
+    # Asks-for-a-human tolerated before escalation: the first ask gets
+    # one genuine solve attempt, the second escalates.
+    human_requests_before_escalation: int = 2
+
+    @classmethod
+    def from_env(cls) -> "Policy":
+        def dec(name: str, default: str) -> Decimal:
+            return Decimal(_env(name, default))
+
+        def num(name: str, default: int) -> int:
+            raw = _env(name)
+            return int(raw) if raw else default
+
+        base = cls()
+        return cls(
+            goodwill_credit_cap=dec("CX_GOODWILL_CREDIT_CAP", str(base.goodwill_credit_cap)),
+            dispute_credit_cap=dec("CX_DISPUTE_CREDIT_CAP", str(base.dispute_credit_cap)),
+            roaming_fair_use_gb=num("CX_ROAMING_FAIR_USE_GB", base.roaming_fair_use_gb),
+            max_no_progress_turns=num("CX_MAX_NO_PROGRESS_TURNS", base.max_no_progress_turns),
+            otp_max_attempts=num("CX_OTP_MAX_ATTEMPTS", base.otp_max_attempts),
+            human_requests_before_escalation=num(
+                "CX_HUMAN_REQUESTS_BEFORE_ESCALATION", base.human_requests_before_escalation
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    backend: str  # openai | anthropic | ollama | offline
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+    @property
+    def is_live(self) -> bool:
+        return self.backend != "offline"
+
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        want = _env("LLM_BACKEND", "auto").lower()
+        openai_key, openai_url = _env("OPENAI_API_KEY"), _env("OPENAI_BASE_URL")
+        anthropic_key = _env("ANTHROPIC_API_KEY")
+        ollama_url = _env("OLLAMA_BASE_URL")
+
+        def openai() -> "LLMConfig":
+            return cls("openai", _env("OPENAI_MODEL", "gpt-4o-mini"), openai_key,
+                       openai_url or "https://api.openai.com/v1")
+
+        def anthropic() -> "LLMConfig":
+            return cls("anthropic", _env("ANTHROPIC_MODEL", "claude-sonnet-4-5"), anthropic_key,
+                       "https://api.anthropic.com")
+
+        def ollama() -> "LLMConfig":
+            return cls("ollama", _env("OLLAMA_MODEL", "llama3.1"), "", ollama_url)
+
+        if want == "openai" and (openai_key or openai_url):
+            return openai()
+        if want == "anthropic" and anthropic_key:
+            return anthropic()
+        if want == "ollama" and ollama_url:
+            return ollama()
+        if want == "auto":
+            if openai_key or openai_url:
+                return openai()
+            if anthropic_key:
+                return anthropic()
+            if ollama_url:
+                return ollama()
+        return cls("offline")
+
+
+@dataclass(frozen=True)
+class S3Config:
+    bucket: str = ""
+    endpoint_url: str = ""
+    access_key: str = ""
+    secret_key: str = ""
+    region: str = "us-east-1"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.bucket and self.endpoint_url)
+
+    @classmethod
+    def from_env(cls) -> "S3Config":
+        return cls(
+            bucket=_env("S3_BUCKET"),
+            endpoint_url=_env("S3_ENDPOINT_URL"),
+            access_key=_env("S3_ACCESS_KEY_ID"),
+            secret_key=_env("S3_SECRET_ACCESS_KEY"),
+            region=_env("S3_REGION", "us-east-1"),
+        )
