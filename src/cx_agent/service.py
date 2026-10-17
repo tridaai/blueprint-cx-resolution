@@ -63,6 +63,12 @@ class ConversationService:
     def list_audit(self, conversation_id: str):
         return self.store.list_audit(conversation_id)
 
+    def list_callbacks(self, conversation_id: str | None = None):
+        return self.store.list_callbacks(conversation_id)
+
+    def list_procedure_runs(self, conversation_id: str | None = None):
+        return self.store.list_procedure_runs(conversation_id)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)

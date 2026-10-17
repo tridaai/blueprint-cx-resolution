@@ -78,6 +78,8 @@
     <div id="escalations"><p class="empty">No escalations. When the agent hands off, the packet it built for the human lands here.</p></div>
     <h2 style="margin-top:22px">Dispute cases</h2>
     <div id="disputes"><p class="empty">No dispute cases. When a customer disputes a charge, the case — every line and its decision — lands here.</p></div>
+    <h2 style="margin-top:22px">Technician callbacks</h2>
+    <div id="callbacks"><p class="empty">No callbacks. When a guided procedure runs out of steps, the callback booked for the technician — with the full step transcript — lands here.</p></div>
   </section>
 </main>
 <footer>
@@ -213,6 +215,26 @@ async function refresh() {
         (d.decision_basis ? '<div class="k">Basis</div><div>' + d.decision_basis + "</div>" : "") +
         (d.goodwill_refused_reason ? '<div class="k">Goodwill</div><div>refused — ' + d.goodwill_refused_reason + "</div>" : "");
       dbox.appendChild(div);
+    }
+  }
+  const cbk = await api("/callbacks");
+  const cbox = document.getElementById("callbacks");
+  if (!cbk.callbacks.length) {
+    cbox.innerHTML = '<p class="empty">No callbacks. When a guided procedure runs out of steps, the callback booked for the technician — with the full step transcript — lands here.</p>';
+  } else {
+    cbox.innerHTML = "";
+    for (const c of cbk.callbacks) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const steps = c.transcript.map(s => "<li>" + s.step_id + " — " + s.kind +
+        (s.detail ? " (" + s.detail + ")" : "") + ": <b>" + s.result + "</b></li>").join("");
+      div.innerHTML = "<h3>" + c.callback_id + " — " + c.status + "</h3>" +
+        '<div class="k">Procedure · account · conversation</div><div>' + c.procedure_id +
+        " v" + c.procedure_version + " · " + (c.account_number || "—") +
+        " · " + c.conversation_id + "</div>" +
+        '<div class="k">Reason</div><div>' + c.reason + "</div>" +
+        '<div class="k">Step transcript</div><ul>' + steps + "</ul>";
+      cbox.appendChild(div);
     }
   }
 }

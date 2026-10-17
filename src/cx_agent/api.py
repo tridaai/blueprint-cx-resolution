@@ -159,6 +159,26 @@ def get_dispute(case_id: str) -> dict:
     return case.model_dump(mode="json")
 
 
+@app.get("/callbacks", dependencies=[Depends(require_key)])
+def list_callbacks(conversation_id: str | None = None) -> dict:
+    return {"callbacks": [c.model_dump(mode="json")
+                           for c in service.list_callbacks(conversation_id)]}
+
+
+@app.get("/callbacks/{callback_id}", dependencies=[Depends(require_key)])
+def get_callback(callback_id: str) -> dict:
+    callback = service.store.get_callback(callback_id)
+    if callback is None:
+        raise HTTPException(status_code=404, detail="no such callback")
+    return callback.model_dump(mode="json")
+
+
+@app.get("/procedure-runs", dependencies=[Depends(require_key)])
+def list_procedure_runs(conversation_id: str | None = None) -> dict:
+    return {"procedure_runs": [r.model_dump(mode="json") for r in
+                               service.list_procedure_runs(conversation_id)]}
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")
