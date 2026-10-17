@@ -13,17 +13,28 @@ plan state, identity state) and the overall pass rate is >= 95%.
 
 Run:  uv run python evals/run_evals.py
 Writes evals/results.json with the full detail.
+
+The clock is pinned (CX_TODAY) so cycle dates — and every figure
+priced off them — are exact on any day the gate runs. A turn may
+also carry a "poke": the world moving under a live conversation
+(a payment landing through another channel, days passing over
+the action log), applied to the store before the message posts.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
+os.environ.setdefault("CX_TODAY", "2026-10-01")
 
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
@@ -36,6 +47,9 @@ from cx_agent.store import InMemoryStore  # noqa: E402
 ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            "identity_state", "payment_method_last4", "executed_kinds",
            "dispute_credit",
+           # Round 5: a scheduled downgrade and a reversal pair are
+           # execution state, held to the same standard.
+           "pending_plan_id", "reversal_count",
            # Round 4: the procedure engine's record-keeping is held
            # to the same standard — step order, callback presence
            # and transcript contents are never a matter of degree.
@@ -71,6 +85,10 @@ def check_turn(result, expect: dict, failures: list, label: str,
         if key == "reply_contains":
             ok = want in result.reply
             got = f"reply lacks {want!r}"
+        elif key == "reply_contains_all":
+            missing = [w for w in want if w not in result.reply]
+            ok = not missing
+            got = f"reply lacks {missing!r}"
         elif key == "reply_not_contains":
             ok = want not in result.reply
             got = f"reply contains {want!r}"
@@ -117,10 +135,18 @@ def check_final(service, scenario: dict, conv_id: str,
         "escalation_queue": escalations[-1].queue if escalations else None,
         "reroute_count": sum(1 for e in audit if e.kind == "reroute"),
         "action_statuses": [a.status for a in store.list_actions(conv_id)],
+        "action_statuses_sorted": sorted(
+            a.status for a in store.list_actions(conv_id)),
         "executed_kinds": executed,
         "actions_count": len(store.list_actions(conv_id)),
         "balance_due": str(account.balance_due) if account else None,
         "plan_id": account.plan_id if account else None,
+        "pending_plan_id": account.pending_plan_id if account else None,
+        "pending_plan_effective": (account.pending_plan_effective
+                                   if account else None),
+        "reversal_count": sum(
+            1 for a in store.list_actions(conv_id)
+            if a.status == "executed" and a.payload.get("reversal_of")),
         "payment_method_last4": account.payment_method_last4 if account else None,
         "dispute_state": case.state if case else None,
         "dispute_credit": str(case.credit_applied) if case else None,
@@ -153,6 +179,30 @@ def check_final(service, scenario: dict, conv_id: str,
     return passed, total, zt_passed, zt_total
 
 
+def apply_poke(service, poke: dict) -> None:
+    """Move the world under a live conversation, before the turn's
+    message posts: set fields on an account (a payment landing
+    through another channel changes the balance the same way), or
+    age every action record by whole days (time passing)."""
+    store = service.store
+    days = int(poke.get("age_actions_days", 0))
+    if days:
+        for record in store.list_actions():
+            made = date.fromisoformat(record.created_date)
+            record.created_date = (made - timedelta(days=days)).isoformat()
+            store.save_action(record)
+    account_number = poke.get("account")
+    if account_number:
+        account = store.get_account(account_number)
+        for key, value in poke.items():
+            if key in ("account", "age_actions_days"):
+                continue
+            if key == "balance_due":
+                value = Decimal(str(value))
+            setattr(account, key, value)
+        store.save_account(account)
+
+
 def main() -> int:
     scenarios = [json.loads(line) for line in
                  (ROOT / "evals" / "scenarios.jsonl").read_text().splitlines()
@@ -172,6 +222,8 @@ def main() -> int:
         conv = service.start_conversation()
         s_passed = s_total = s_zt_passed = s_zt_total = 0
         for idx, turn in enumerate(scenario["turns"], start=1):
+            if turn.get("poke"):
+                apply_poke(service, turn["poke"])
             result = service.post_message(
                 conv.conversation_id, _substitute(turn["say"]))
             p, t, zp, zt = check_turn(
