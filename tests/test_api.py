@@ -125,3 +125,38 @@ def test_complaint_feedback_and_mining_endpoints():
     mining = client.get("/care/mining").json()
     assert mining["unhandled_utterances"] >= 1
     assert mining["candidates"] == []  # one utterance is no cluster
+
+
+def test_retention_endpoints():
+    client = TestClient(app)
+    client.post("/seed")
+    before = client.get("/retention/report").json()
+    conv = client.post("/conversations").json()
+    cid = conv["conversation_id"]
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "Just cancel my account, no offers please"})
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "NB-1005 postcode 94107"})
+    from cx_agent.identity import expected_code
+
+    turn = client.post(
+        f"/conversations/{cid}/messages",
+        json={"text": expected_code("NB-1005")}).json()
+    # No offers means none: the first proposal is the cancellation.
+    assert turn["action"]["kind"] == "cancel_account"
+    done = client.post(f"/conversations/{cid}/messages",
+                       json={"text": "yes"}).json()
+    assert done["action"]["status"] == "executed"
+    cases = client.get("/retention/cases").json()["cases"]
+    mine = [c for c in cases if c["conversation_id"] == cid]
+    assert len(mine) == 1
+    assert mine[0]["no_offers_requested"] is True
+    assert mine[0]["outcome"] == "cancelled"
+    detail = client.get(f"/retention/cases/{mine[0]['case_id']}")
+    assert detail.status_code == 200
+    assert client.get("/retention/cases/RET-NOPE").status_code == 404
+    report = client.get("/retention/report").json()
+    assert report["cases"] == before["cases"] + 1
+    assert report["cancellations_completed"] == \
+        before["cancellations_completed"] + 1
+    assert report["offers_made"] == before["offers_made"]

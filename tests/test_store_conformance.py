@@ -394,6 +394,45 @@ def test_signal_records(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_retention_cases(kind, tmp_path):
+    """Round 14 records behave identically on every store: a
+    retention case round-trips with its reason, its one save
+    offer and its outcome, lists filter by conversation and
+    account, and the account carries its scheduled cancellation
+    date in its own payload."""
+    from cx_agent.models import RetentionCase
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+
+    case = RetentionCase(
+        case_id="RET-T1", conversation_id="CONV-T",
+        account_number="NB-1001", reason="price",
+        reason_text="I want to cancel, it's too expensive",
+        state="cancelled", outcome="cancelled",
+        save_offer_mechanism="plan_downgrade",
+        save_offer_summary="change your plan to Basic Talk & Text",
+        save_offer_outcome="declined",
+        cancellation_effective="2026-10-13",
+        created_date="2026-10-01", updated_date="2026-10-01")
+    store.save_retention_case(case)
+    assert store.get_retention_case("RET-T1") == case
+    assert store.list_retention_cases(conversation_id="CONV-T") == [case]
+    assert store.list_retention_cases(account_number="NB-1001") == [case]
+    assert store.list_retention_cases(account_number="NB-1002") == []
+    assert store.get_retention_case("RET-NONE") is None
+
+    account = store.get_account("NB-1001")
+    account.pending_cancellation_effective = "2026-10-13"
+    store.save_account(account)
+    assert store.get_account("NB-1001").pending_cancellation_effective \
+        == "2026-10-13"
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
 def test_quality_digests(kind, tmp_path):
     """Round 12 records behave identically on every store: one
     digest per date, listed in date order, and saving a digest
