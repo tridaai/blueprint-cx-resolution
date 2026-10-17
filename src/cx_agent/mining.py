@@ -77,16 +77,25 @@ def _label(texts: list[str]) -> str:
     return texts[0][:40] if texts else ""
 
 
-def mine_unhandled_intents(store, policy) -> dict:
-    """Run the mining pass over every stored conversation and
+def mine_unhandled_intents(store, policy,
+                           conversation_ids: set | None = None) -> dict:
+    """Run the mining pass over the stored conversations and
     return the report: candidate clusters (at or above the policy
     threshold) first-class, smaller clusters counted beneath it,
-    and the totals a reader needs to trust the numbers."""
+    and the totals a reader needs to trust the numbers.
+    `conversation_ids` scopes the pass to a set of conversations
+    (the daily quality pass mines its own day); None mines the
+    whole store, as the standalone report always has."""
     no_progress_ids = {e.conversation_id for e in store.list_escalations()
                        if e.reason == "no_progress"}
+    convs = sorted(store.list_conversations(),
+                   key=lambda c: c.conversation_id)
+    if conversation_ids is not None:
+        no_progress_ids &= conversation_ids
+        convs = [c for c in convs
+                 if c.conversation_id in conversation_ids]
     gathered: list[tuple[str, str, str]] = []  # (utterance, source, conv id)
-    for conv in sorted(store.list_conversations(),
-                       key=lambda c: c.conversation_id):
+    for conv in convs:
         found = _utterance_for(store, conv, no_progress_ids)
         if found:
             gathered.append((found[0], found[1], conv.conversation_id))
@@ -125,7 +134,7 @@ def mine_unhandled_intents(store, policy) -> dict:
     report_clusters.sort(key=lambda c: (-c["count"], c["label"]))
     candidates = [c for c in report_clusters if c["candidate"]]
     return {
-        "conversations_scanned": len(store.list_conversations()),
+        "conversations_scanned": len(convs),
         "unhandled_utterances": len(gathered),
         "min_cluster": policy.mining_min_cluster,
         "similarity": policy.mining_similarity,
