@@ -22,6 +22,13 @@ any adversarial scenario fails the gate outright, whatever the
 overall rate says. The report breaks results down by rubric, by
 persona, and by adversarial class, so a regression localises.
 
+The signals trajectories (rubric "signals", zero-tolerance as
+scenarios) grade round 11: the early human offer fired on the
+rule's exact turn and answered each way, the identity-effort
+offer, second explanation forms served on confusion, the signal
+summary riding the handoff packet, and a calm negative control
+that must fire nothing across its whole length.
+
 Run:  uv run python evals/run_evals.py
 Writes evals/results.json with the full detail.
 
@@ -99,7 +106,14 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # Round 10: why a conversation ended is a record, not an
            # impression — the outcome, the cause and the rule that
            # fired are exact or failed.
-           "attribution_outcome", "attribution_cause", "attribution_rule"}
+           "attribution_outcome", "attribution_cause", "attribution_rule",
+           # Round 11: the signal interventions and the packet's
+           # signal summary are record state — an offer fired on
+           # the wrong turn, or a handoff missing the customer's
+           # experience, is exact or failed.
+           "signal_interventions", "second_forms_used",
+           "packet_signal_effort", "packet_signal_trend",
+           "packet_signal_interventions", "signal_last_rising"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -294,6 +308,28 @@ def check_final(service, scenario: dict, conv_id: str,
     values["attribution_outcome"] = record.outcome if record else None
     values["attribution_cause"] = record.cause if record else None
     values["attribution_rule"] = record.rule if record else None
+    # Round 11: the signal series this conversation recorded, and
+    # the signal summary its handoff packet carried.
+    sig_records = store.list_signal_records(conv_id)
+    values["signal_records_count"] = len(sig_records)
+    values["signal_interventions"] = [
+        f"{i['kind']}:{i['outcome']}" for r in sig_records
+        for i in r.interventions]
+    values["signal_last_rising"] = (
+        sig_records[-1].frustration_rising if sig_records else None)
+    values["second_forms_used"] = sorted({
+        i["kind"].split(":", 1)[1] for r in sig_records
+        for i in r.interventions
+        if i["kind"].startswith("second_form:")})
+    packet = escalations[-1].packet if escalations else None
+    values["packet_signal_effort"] = (
+        packet.signals.get("effort_score") if packet else None)
+    values["packet_signal_trend"] = (
+        packet.signals.get("frustration_trend") if packet else None)
+    values["packet_signal_interventions"] = [
+        f"{i['kind']}:{i['outcome']}"
+        for i in (packet.signals.get("interventions", [])
+                  if packet else [])]
     for key, want in final.items():
         total += 1
         is_zt = scenario_zt or key in ZT_KEYS
