@@ -472,9 +472,13 @@ def _fault_cited(lowered: str) -> bool:
 
 def _proposal_version(conv: Conversation, ctx: Ctx) -> int:
     """Proposals are versioned per conversation: the count of
-    plan-change records already on it, plus one."""
+    plan-change PROPOSAL records already on it, plus one. A
+    proposal record is the one that starts life as "proposed"
+    (it may later be superseded or declined); execution attempts
+    write their own records and don't mint versions."""
     prior = [r for r in ctx.store.list_actions(conv.conversation_id)
-             if r.kind == ActionKind.CHANGE_PLAN]
+             if r.kind == ActionKind.CHANGE_PLAN
+             and r.status in ("proposed", "superseded", "declined")]
     return len(prior) + 1
 
 
