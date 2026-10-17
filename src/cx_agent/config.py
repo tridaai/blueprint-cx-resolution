@@ -124,6 +124,13 @@ class Policy:
     # (Jaccard over content tokens) with their previous message
     # reaches this.
     confusion_repeat_overlap: float = 0.6
+    # The daily quality pass (round 12): its regression
+    # spot-check samples every eval scenario whose id hashes
+    # into one-in-this-many, topped up to at least one per
+    # rubric, and the digest quotes at most this many
+    # unhandled-intent candidates.
+    daily_spot_check_modulus: int = 4
+    daily_mining_top: int = 3
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -181,6 +188,10 @@ class Policy:
                 "CX_IDENTITY_EFFORT_ATTEMPTS", base.identity_effort_attempts),
             confusion_repeat_overlap=flt(
                 "CX_CONFUSION_REPEAT_OVERLAP", base.confusion_repeat_overlap),
+            daily_spot_check_modulus=num(
+                "CX_DAILY_SPOT_CHECK_MODULUS", base.daily_spot_check_modulus),
+            daily_mining_top=num(
+                "CX_DAILY_MINING_TOP", base.daily_mining_top),
         )
 
 

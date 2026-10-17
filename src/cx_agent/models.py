@@ -584,6 +584,35 @@ class AnnotationRecord(BaseModel):
     created_date: str = ""  # ISO date
 
 
+class DailyDigest(BaseModel):
+    """One day's quality digest (round 12): the snapshot the
+    daily pass composes from that day's records — volume,
+    outcomes and causes, the signal aggregates, the complaint
+    book's state at day end, the mining candidates, the
+    escalations, and the regression spot-check's verdict.
+
+    The digest is a snapshot, not a running total: re-running
+    the pass for a date REPLACES the stored digest for that date
+    and raises `version` by one, so a replacement is always on
+    the record, never silent. It informs humans — nothing
+    anywhere acts on it automatically."""
+
+    date: str  # ISO date the digest covers
+    version: int = 1
+    conversations: int = 0  # closed conversations attributed that day
+    by_outcome: dict = {}
+    by_entry_desk: dict = {}
+    resolution_share: float | None = None
+    cause_mix: dict = {}  # attributed cause -> count (designed endings excluded)
+    escalated_by_design: int = 0
+    no_cause: int = 0
+    signals: dict = {}  # the day's signal aggregates (round 11 measures)
+    complaints: dict = {}  # SLA states at day end: open/due_soon/breached/settled
+    mining_candidates: list = []  # top unhandled-intent candidates
+    escalations_by_reason: dict = {}
+    spot_check: dict = {}  # the regression spot-check's findings
+
+
 class SignalRecord(BaseModel):
     """One turn's conversation signals, computed in code from the
     conversation's own records (signals.py) — how the customer is

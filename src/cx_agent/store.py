@@ -51,6 +51,7 @@ from .models import (
     ComplaintRecord,
     Conversation,
     Customer,
+    DailyDigest,
     DisputeCase,
     Escalation,
     FeedbackRecord,
@@ -195,6 +196,9 @@ class Store(Protocol):
     def save_signal_record(self, r: SignalRecord) -> None: ...
     def list_signal_records(self, conversation_id: str | None = None
                             ) -> list[SignalRecord]: ...
+    def save_digest(self, d: DailyDigest) -> None: ...
+    def get_digest(self, digest_date: str) -> DailyDigest | None: ...
+    def list_digests(self) -> list[DailyDigest]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
     def list_audit(self, conversation_id: str) -> list[AuditEvent]: ...
     def count_customers(self) -> int: ...
@@ -229,6 +233,7 @@ class InMemoryStore:
         self.attributions: dict[str, AttributionRecord] = {}
         self.annotations: dict[str, AnnotationRecord] = {}
         self.signal_records: dict[str, SignalRecord] = {}
+        self.quality_digests: dict[str, DailyDigest] = {}
         self.audit: list[AuditEvent] = []
 
     def _put(self, table: dict, key: str, model) -> None:
@@ -451,6 +456,19 @@ class InMemoryStore:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: (r.conversation_id, r.turn))
 
+    # Digests are keyed by the date they cover: saving one for a
+    # date that already has one REPLACES it — the daily pass
+    # counts the replacement on the record itself (its version).
+    def save_digest(self, d):
+        self._put(self.quality_digests, d.date, d)
+
+    def get_digest(self, digest_date):
+        return self._get(self.quality_digests, digest_date)
+
+    def list_digests(self):
+        return sorted(self._all(self.quality_digests),
+                      key=lambda d: d.date)
+
     def save_audit(self, e):
         with self._lock:
             self.audit.append(copy.deepcopy(e))
@@ -492,6 +510,7 @@ _TABLES = {
     "attributions": ("conversation_id", AttributionRecord),
     "annotations": ("annotation_id", AnnotationRecord),
     "signals": ("record_id", SignalRecord),
+    "quality_digests": ("digest_date", DailyDigest),
 }
 
 
@@ -734,6 +753,16 @@ class _SqlStore:
         if conversation_id:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         return sorted(rows, key=lambda r: (r.conversation_id, r.turn))
+
+    def save_digest(self, d):
+        self._save("quality_digests", d.date, d)
+
+    def get_digest(self, digest_date):
+        return self._load("quality_digests", digest_date)
+
+    def list_digests(self):
+        return sorted(self._load_all("quality_digests"),
+                      key=lambda d: d.date)
 
     def save_audit(self, e):
         self._execute(
