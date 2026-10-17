@@ -1543,13 +1543,15 @@ def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
         due_line = (f"We'll respond in substance by "
                     f"{record.response_due}.")
         ref_line = f"Your complaint reference is {record.complaint_id}."
+        words = category.replace("_", " ")
+        article = "an" if words[0] in "aeiou" else "a"
         return SpecialistResult(
             specialist="care",
             findings=[Finding(
                 topic="complaint",
                 text=("I'm sorry you've had this experience — thank you "
                       f"for telling me plainly. {ref_line} I've recorded "
-                      f"it as a {category.replace('_', ' ')} complaint, "
+                      f"it as {article} {words} complaint, "
                       f"in your own words, and a person will pick it up "
                       f"from here. {due_line}"))],
             citations=_cite(ctx, "general",

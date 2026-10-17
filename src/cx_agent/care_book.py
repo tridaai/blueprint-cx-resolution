@@ -95,12 +95,24 @@ def open_complaint(store, conv, text: str, category: str, policy,
                    account_number: str = "") -> ComplaintRecord:
     """Write the complaint record the moment it's recognised:
     the customer's words verbatim, and the response deadline
-    computed from policy (created + complaint_response_days)."""
+    computed from policy (created + complaint_response_days).
+    The record attaches to the conversation's account, or to the
+    account the customer names in the message — identification,
+    exactly as the accessibility record attaches; a complaint
+    needs no verification to be written down."""
+    number = account_number or conv.account_number \
+        or account_number_in(text)
+    if number and conv.account_number is None \
+            and store.get_account(number) is not None:
+        customer = store.get_customer_by_account(number)
+        conv.account_number = number
+        if customer is not None:
+            conv.customer_id = customer.customer_id
     created = today()
     record = ComplaintRecord(
         complaint_id=f"CMP-{uuid.uuid4().hex[:10]}",
         conversation_id=conv.conversation_id,
-        account_number=account_number or conv.account_number or "",
+        account_number=number or "",
         category=category,
         text=text,
         status="open",
