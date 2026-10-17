@@ -811,16 +811,103 @@ The digest triggers no automated action anywhere. It is an
 operator artifact: read in the console, exported as markdown,
 diffed day over day in the trend view.
 
+## The prompt registry
+
+Round 13 puts every governed text behind one versioned
+registry (`prompts.py`, migration 0011 in both dialects),
+following the procedures' pattern: entries are stored per
+version and never edited or deleted, the active version is the
+highest unless an operator pin stands, and which version
+served is a fact recorded on the record it served. Four
+surfaces:
+
+- **compose** — `compose.system` and `compose.user`, the
+  supervisor's drafting instructions and the template the
+  turn's facts are poured into. The live drafter in `llm.py`
+  resolves both at call time; the strings exist nowhere else.
+- **intent** — `intent.system` and `intent.user`, the router's
+  tie-break classification prompt, resolved the same way.
+- **explanation** — the second forms (round 11), one entry per
+  topic, resolved from the store at serve time by the care
+  desk. The bill's second form is not an entry: it is composed
+  from the customer's own figures at runtime, a deterministic
+  template, and is classified as one.
+- **policy** — the sixteen corpus documents. `dataset.py`
+  builds the `PolicyDocument` records from the registry texts
+  (one wording, two shapes of record), and activating a new
+  policy version rewrites the corpus document and re-embeds it,
+  so retrieval, citation and the registry never disagree about
+  what the policy says.
+
+Loading is fail-closed. Resolving an entry the registry does
+not have — or a malformed one: a version below 1, blank text,
+an unknown surface, a pin pointing at a version that does not
+exist — raises `PromptRegistryError` naming the entry and the
+defect. The seed validates the whole shipped set after writing
+it, so a broken registry refuses at seed time; the live
+boundary resolves its prompts before the guarded provider
+call, so a registry failure is a loud refusal, never a silent
+degradation to the offline composer. (A live *provider*
+failure still degrades; that distinction is the point.)
+
+Change is three recorded acts — add a version, roll back
+(pin), unpin — each with actor and note in the append-only act
+log, and each gated by the lint over the active set as it
+would stand after the act: a version that would break the
+lint cannot be activated, and a rollback onto one is refused
+the same way. A pin holds across later versions until it is
+lifted; adding a version never silently unfreezes a rollback.
+
+The lint (`promptlint.py`) is four deterministic rules. Figure
+consistency: fourteen declared mappings from a figure stated
+in a text (a pattern, a Policy field) — the dispute cap, both
+goodwill figures and their window, the fair-use ceiling, the
+bill-shock threshold, the code attempts, the four arrangement
+terms, the complaint window — checked against the live Policy,
+so an operator who raises a cap in config without rewording
+the policy hears about it from the gate, with both values
+named; a declared figure that vanishes from its text is a
+finding too. Worked-example figures are unmapped on purpose:
+the second forms' sample bills and trips use round invented
+numbers, labelled as examples in the text, and state no
+policy. Banned promises: a governed phrase list (guarantees,
+unbounded or instant refunds) fails any surface. Side
+channels: outside the compose surface, no entry may instruct
+contacting the customer directly — the specialists return
+findings, only the supervisor writes to the customer, and the
+registry now enforces in text what the architecture enforces
+in structure. Composition discipline: a compose entry must
+carry the verbatim-figures and Sources markers.
+
+Provenance closes the loop: the supervisor accumulates
+`prompt_versions` on the conversation as turns run — the
+compose pair on every composed turn, each policy document at
+the version cited, the intent pair when a hint is taken, a
+second form at the version served — and
+`GET /conversations/{id}/prompts` resolves the map back to the
+exact texts. Recording is best-effort by design (bookkeeping
+never fails a customer's turn); the fail-closed refusal lives
+at the boundary that needs the words.
+
+What the registry does not hold is as deliberate: the
+deterministic template text the code composes itself — the
+confirmation ask, the signal offer lines, the escalation
+reply, the specialists' computed findings sentences, the
+procedure step instructions (versioned with the procedures
+since round 4), the bill's summary-first form. None of it is
+an instruction to a model; it is code, reviewed as code.
+
 ## Round map
 
-This document describes rounds 1–12 (core; rerouting and
+This document describes rounds 1–13 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
-pass). The scheduled deepening — the retention flow, the
-prompt registry, handoff scoring, cost budgets — is laid out in
-the blueprint backlog; the architecture above is shaped so each
-lands as a new node, desk behavior, or report over the same
-records, not as a rewrite.
+pass; the prompt registry and its lint). The scheduled
+deepening — the retention flow, handoff scoring, cost
+budgets — is laid out in the blueprint backlog; the
+architecture above is shaped so each lands as a new node,
+desk behavior, or report over the same records, not as a
+rewrite.

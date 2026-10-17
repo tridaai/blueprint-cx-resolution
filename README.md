@@ -279,6 +279,50 @@ digest run for today is complete; a conversation that merely
 stopped joins the day an operator attributes it. And the
 digest informs humans — nothing anywhere acts on it.
 
+## Every word is versioned
+
+The texts the agent works under are data with versions, in a
+**prompt registry** (`prompts.py`): the compose instructions
+the supervisor drafts under and the template the facts are
+poured into, the router's classification prompt, the second
+explanation forms, and the policy documents themselves — 27
+governed texts, seeded with the book and stored per version.
+The active version is the highest unless an operator pins
+another; a change is a new version, old versions stay readable
+forever, and a rollback is a recorded pin, not an edit. The
+model boundary resolves its prompts from the registry at call
+time and refuses — loudly, with the entry named — if the
+registry cannot serve one: there is no fallback prompt in the
+code, and no second copy of any of these texts anywhere.
+
+Every activation passes a **lint** (`cx-agent prompt-lint`,
+`promptlint.py`) that runs in the test gate and inside the
+operator acts themselves. It checks the words against the
+code: the figures a text states — the dispute cap, the
+goodwill tiers, the fair-use ceiling, the arrangement terms,
+the code attempts, the complaint window — must equal the
+Policy values the desks enforce, under a mapping declared in
+the lint itself (worked-example figures state no policy and
+are deliberately unmapped); promise phrases the agent may
+never make fail on sight; no entry outside the compose surface
+may instruct contacting the customer directly, because only
+the supervisor writes to the customer; and a compose entry
+must carry the verbatim-figures and Sources instructions it
+exists to enforce. Activating a policy text rewrites the
+corpus document and its embedding to match, so retrieval
+serves the same words the registry calls active.
+
+Each conversation records the registry versions that served
+it — the compose pair, each policy document at the version
+cited, each second form at the version served — on its record
+(`GET /conversations/{id}/prompts`), so any historical reply
+can be traced to the exact texts behind it. What the registry
+deliberately does not hold: the deterministic text the code
+composes itself (the confirmation ask, the offer lines, the
+desks' computed findings, procedure instructions, the bill's
+summary-first form) — code-composed templates, reviewed as
+code, never instructions to a model.
+
 ## The rules are code
 
 - **Identity** — unverified → verifying → verified / failed.
@@ -377,13 +421,14 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (258 tests) covers the deterministic core —
+The pytest suite (287 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, care records and the mining pass, failure
 attribution and the annotation queue, the confirmation
-re-ask regressions, store conformance across the SQLite and
-in-memory profiles (the PostgreSQL leg runs when
+re-ask regressions, the prompt registry and its lint, store
+conformance across the SQLite and in-memory profiles (the
+PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
 
 ## Layout
@@ -427,9 +472,18 @@ src/cx_agent/
                    from a day's records, the regression
                    spot-check against the committed baseline,
                    the trend view, the markdown rendering
-  explanations.py  second explanation forms: summary-first
-                   restatements and worked examples for the top
-                   topics, plus the bill's summary-first form
+  prompts.py       the prompt registry: every governed text as
+                   versioned data (compose + intent prompts, the
+                   explanation forms, the policy corpus), the
+                   fail-closed resolver, the recorded operator
+                   acts (add / rollback / unpin)
+  promptlint.py    the prompt lint: figure consistency against
+                   the Policy, banned promises, side-channel
+                   sends, composition discipline — the test gate
+                   and the activation gate
+  explanations.py  second explanation forms, resolved from the
+                   registry at serve time, plus the bill's
+                   summary-first form (a computed template)
   procedures.py    the troubleshooting engine: procedures as
                    versioned data, runs, tools, branches, safety
                    steps, transcript-carrying callbacks
