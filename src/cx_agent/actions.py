@@ -88,6 +88,26 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
 
     account = store.get_account(conv.account_number) if conv.account_number else None
 
+    if proposal.payload.get("retention_save_offer"):
+        # The single-counter rule, re-checked at execution (round
+        # 14): one save offer per retention case, ever. If another
+        # save-offer action for this case has already executed —
+        # or the case has already settled as saved — this one may
+        # not run, whatever was proposed in between.
+        case_id = str(proposal.payload.get("retention_case_id", ""))
+        prior = [r for r in store.list_actions()
+                 if r.payload.get("retention_case_id") == case_id
+                 and r.payload.get("retention_save_offer")
+                 and r.status == "executed"]
+        if prior:
+            return blocked("retention_single_counter_used")
+        if case_id:
+            case = store.get_retention_case(case_id)
+            if case is None:
+                return blocked("retention_case_missing")
+            if case.outcome == "saved_accepted_offer":
+                return blocked("retention_single_counter_used")
+
     if proposal.kind == ActionKind.APPLY_CREDIT:
         if account is None:
             return blocked("no_account")
@@ -158,6 +178,27 @@ def execute(store, conv: Conversation, proposal: ProposedAction,
             account.pending_plan_id = None
             account.pending_plan_effective = ""
             store.save_account(account)
+
+    elif proposal.kind == ActionKind.CANCEL_ACCOUNT:
+        if account is None:
+            return blocked("no_account")
+        if account.pending_cancellation_effective:
+            return blocked("cancellation_already_scheduled")
+        effective = str(proposal.payload.get("effective_date", ""))
+        if not effective:
+            return blocked("cancellation_date_missing")
+        # Scheduled, not immediate — the pending-plan machinery's
+        # shape: the date lands on the account, the live account
+        # does not change today, and the customer keeps the
+        # service they have paid for until the boundary. A
+        # scheduled plan change is superseded: the customer is
+        # leaving, not moving.
+        account.pending_cancellation_effective = effective
+        account.pending_plan_id = None
+        account.pending_plan_effective = ""
+        store.save_account(account)
+        record.payload = {**proposal.payload,
+                          "cancellation_effective": effective}
 
     elif proposal.kind == ActionKind.UPDATE_PAYMENT_METHOD:
         last4 = str(proposal.payload.get("last4", ""))
