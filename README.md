@@ -158,7 +158,20 @@ open http://localhost:8000              # the operator console
 - **Customer care** — the catch-all desk for legitimate needs
   outside the five, answering from the policy corpus with
   citations; a need it cannot serve is logged as an unhandled
-  intent, not papered over.
+  intent, not papered over. The desk also records: a complaint
+  becomes a stored record the moment it's recognised —
+  category from a governed list, the customer's words verbatim,
+  and a response deadline computed from policy (five days) that
+  an SLA watch reads; a complaint still open past its deadline
+  is raised to the human queue with its record attached, and a
+  customer chasing their complaint is answered from the record,
+  not recorded twice. Compliments and feedback are kept
+  verbatim, as data. An accessibility need a customer states —
+  large print, email instead of letters — is written on the
+  account and honoured at every later contact. And the
+  conversations that ended unhandled are mined offline into
+  candidate intents for a human to design (`cx-agent
+  intent-mining`) — a report, never an auto-created intent.
 
 ## The rules are code
 
@@ -202,6 +215,14 @@ open http://localhost:8000              # the operator console
   turn with no clear signal goes to the care desk, never to a
   transactional desk on a guess. Every routing decision is
   recorded with its matched signals and the runner-up intent.
+- **Vulnerability** — the flag on an account record is set only
+  from a circumstance the customer states plainly, in one of
+  three governed classes (bereavement, serious illness,
+  financial hardship), and the setting is audited with its
+  class. Tone, age, slow typing and sad phrasing set nothing —
+  the tests prove both directions. Setting it routes the
+  conversation to the priority care queue with the flag visible
+  in the handoff packet, and it persists for later contacts.
 - **Screening** — customer text is screened for prompt injection
   before any model sees it; attempts are audit-logged and answered
   as ordinary service.
@@ -209,7 +230,7 @@ open http://localhost:8000              # the operator console
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **52 scripted multi-turn conversations** played by
+behavioral: **71 scripted multi-turn conversations** played by
 persona drivers (the refund seeker, the human-demander, the
 fragment writer, the AI skeptic, the confused elder, non-native
 phrasing) against the real service, graded with pass/fail rubric
@@ -217,18 +238,18 @@ assertions — escalation, education, grounding, transaction,
 identity, care. The gate requires **100% on zero-tolerance
 assertions** (escalation decisions, whether an action executed,
 exact money and identity state) and **≥95% overall**. Current
-state of the tree: 350/350 assertions, 230/230 zero-tolerance.
+state of the tree: 532/532 assertions, 355/355 zero-tolerance.
 
 ```bash
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (118 tests) covers the deterministic core —
+The pytest suite (182 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
-transactions, store conformance across the SQLite and in-memory
-profiles (the PostgreSQL leg runs when `CX_TEST_DATABASE_URL`
-names a scratch database).
+transactions, care records and the mining pass, store conformance
+across the SQLite and in-memory profiles (the PostgreSQL leg
+runs when `CX_TEST_DATABASE_URL` names a scratch database).
 
 ## Layout
 
@@ -252,6 +273,12 @@ src/cx_agent/
                    effective dates, proposal fingerprints, reversals
   billing_book.py  the billing ledger: decomposition, comparison,
                    bill shock, per-line dispute cases, credit history
+  care_book.py     the care ledger: complaint records + the SLA
+                   watch, feedback records, accessibility on the
+                   account
+  mining.py        the unhandled-intent mining pass: clusters
+                   the conversations that ended unhandled into
+                   candidate intents (a report; creates nothing)
   procedures.py    the troubleshooting engine: procedures as
                    versioned data, runs, tools, branches, safety
                    steps, transcript-carrying callbacks
@@ -262,7 +289,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (64 trajectories) + run_evals.py
+evals/             scenarios.jsonl (71 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```

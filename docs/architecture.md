@@ -157,7 +157,7 @@ transactional desk on a guess.
 | offers | plan catalogue, loyalty offer, cycle calendar, change history | `change_plan` (and its reversal) |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
 | account | account record, balance, attempt log, arrangements, processor double, autopay state | `update_payment_method`, `payment_arrangement`, `take_payment`, `refund_payment`, `set_autopay` |
-| care | policy corpus retrieval | — (answers, or logs an unhandled intent) |
+| care | policy corpus retrieval, complaint records + SLA watch, feedback records, the account's accessibility record | — (answers, records, or logs an unhandled intent) |
 
 Dispute evidence is a property of the bill, computed in code:
 a charge marked as a duplicate of another, a charge levied after
@@ -277,6 +277,88 @@ is composed from the computed figures, following the fair-use
 notice pattern. At the customer's next contact the notice leads
 the payments conversation, verbatim, and the diagnosis path
 opens from it.
+
+## Care depth
+
+The care desk is the catch-all, and round 8 makes it the desk
+that records (`care_book.py`). Three of the things a customer
+says there are data, not filler:
+
+**Complaints are records.** Recognition is a rule, not a model:
+the customer's words carry a complaint marker, a governed
+category list (staff conduct, appointment, billing, coverage,
+service quality, other — first matching class in code order
+decides) classifies it, and the record is written at once —
+words verbatim, status open, and the response deadline computed
+from policy (created + `complaint_response_days`). The reply is
+the acknowledgment: reference, category, date. A customer
+chasing an open complaint in the same conversation is answered
+from its record — reference and standing deadline — rather than
+recorded a second time. The **SLA watch** is a pure scan of the
+open records against the shared clock, following the repo's
+pattern for time-derived state (the arrangement book derives
+its states the same way): breached and near-breach are computed,
+never stored. Running the watch (API, CLI, console) raises each
+breached complaint to the human queue as an escalation whose
+summary carries the record — category, missed deadline, the
+customer's words — and the record keeps the queue entry's id,
+so a breach is raised exactly once. Near-breach complaints are
+flagged in the complaints views for the team to see coming.
+
+**Feedback is kept verbatim.** A compliment or a piece of
+general feedback is recognised by an explicit marker, or by
+praise aimed at a named subject, and recorded with its kind.
+A bare "thanks, great" stays what it is — a pleasantry the
+closing branch answers — because a record of every thank-you
+would be noise, and the business mines the records.
+
+**Accessibility needs live on the account.** A stated need
+("send my letters in large print", "don't phone me, text me")
+is recorded on the account record itself: the words verbatim in
+`accessibility_note`, the derived instruction in
+`preferred_contact`. If no account can be resolved, the desk
+asks for the number and holds the words in the conversation
+state until it arrives — the need is never dropped for lagging
+paperwork. Later contacts read the record: a contact-shaped
+question is answered with the honoured preference line, stated
+as the commitment it became.
+
+**Vulnerability is a discipline about what may be written
+down.** The persistent flag on the customer record is set in
+exactly one place — the supervisor's screen node — and from
+exactly one evidence class: a circumstance the customer states
+plainly, matched against the governed phrase classes in
+`screening.py` (bereavement, serious illness, financial
+hardship stated in the first person). The setting writes an
+audit event with the class and its source. The older broad
+keyword screen still routes *this* conversation to a person on
+a mention, but it never writes the lasting record: tone, age,
+apologies for slow typing and other indirect hints set nothing,
+and the test suite proves both directions. A set flag routes
+the conversation to the priority care queue, the handoff packet
+carries `vulnerable` as a field with an open item naming where
+the flag came from, and the flag persists — a later contact
+with the same account escalates on the record alone.
+
+**Unhandled-intent mining is a report, and only a report**
+(`mining.py`). The pass reads every stored conversation and
+takes one utterance from each that ended unhandled — the care
+desk's own log first, else the first turn the router sent to
+care on low confidence (read from the turn audit's routing
+evidence), else the last ask before a no-progress escalation.
+Utterances cluster greedily in conversation-id order against
+the first member's embedding, using the repo's own hashing
+embedder and cosine — no new machinery — at the policy
+similarity; a cluster at or above the policy count is a
+**candidate intent**, labelled by its most characteristic word
+pair, with up to three verbatim samples. Determinism is a
+property of the construction (fixed order, fixed tie-breaks),
+and the suite asserts two runs agree exactly. The report is
+served at `/care/mining`, in the console, and as
+`cx-agent intent-mining`; nothing anywhere creates an intent
+from it. Designing the intent stays a human's job — the pass
+exists so the need is visible, counted, and quoted in the
+customers' own words.
 
 ## Plan-change transactions
 
@@ -426,7 +508,7 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 64 scripted
+The eval pack grades trajectories, not replies: 71 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
@@ -459,7 +541,16 @@ second arrangement is refused, a missed instalment deriving the
 arrangement broken and routing the next contact to a human with
 the record, a refund refused to a customer-named bank account
 and executed to the card on file, and a failed autopay whose
-notice figures lead the next contact. The rubrics encode the
+notice figures lead the next contact. Round 8 adds the care
+trajectories: a complaint recorded with its category and
+deadline and acknowledged in the reply, the same complaint
+breach-aged by a poke and raised by the watch, a compliment
+kept verbatim, an accessibility need honoured at a later
+contact, an explicit vulnerability statement that sets the flag
+and routes to the care queue with the flag in the packet, a
+hinted one that sets nothing, and a planted set of repeated
+unhandled asks surfacing as one mined candidate with the right
+count. The rubrics encode the
 production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
@@ -472,8 +563,10 @@ production rules:
 - **transaction** — proposals price exactly, executions land
   exactly, declines change nothing, the unverified get nothing.
 - **identity** — the machine's states, including lockout.
-- **care** — the catch-all answers what it can and logs what it
-  can't.
+- **care** — the catch-all answers what it can, records what it
+  must (complaints with their deadlines, feedback verbatim,
+  needs on the account), and logs what it can't — and the
+  unhandled logs mine into candidate intents.
 - **technical** — procedures branch on tool results, measurements
   decide in code, dead ends book transcript-carrying callbacks,
   safety steps cannot be skipped.
@@ -509,9 +602,10 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes rounds 1–7 (core; rerouting and
+This document describes rounds 1–8 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
-plan-change transactions; roaming depth; payments depth). The scheduled deepening — the
+plan-change transactions; roaming depth; payments depth;
+customer care depth and unhandled-intent mining). The scheduled deepening — the
 retention flow, failure attribution and the annotation queue,
 conversation-signal extraction, the daily quality pass, the
 prompt registry, handoff scoring, cost budgets — is laid out in
