@@ -36,6 +36,10 @@
   .esc h3 { margin:0 0 6px; font-size:14px; }
   .esc .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
   .esc ul { margin:4px 0 8px 16px; padding:0; }
+  .dsp { border:1px solid var(--line); background:var(--panel); border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:13.5px; }
+  .dsp h3 { margin:0 0 6px; font-size:14px; }
+  .dsp .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+  .dsp ul { margin:4px 0 8px 16px; padding:0; }
   .empty { color:var(--mut); font-size:14px; }
   footer { display:flex; align-items:center; gap:16px; padding:14px 28px; border-top:1px solid var(--line); font-size:14px; }
   footer img { width:24px; height:24px; }
@@ -72,6 +76,8 @@
   <section>
     <h2>Escalation queue — handoff packets</h2>
     <div id="escalations"><p class="empty">No escalations. When the agent hands off, the packet it built for the human lands here.</p></div>
+    <h2 style="margin-top:22px">Dispute cases</h2>
+    <div id="disputes"><p class="empty">No dispute cases. When a customer disputes a charge, the case — every line and its decision — lands here.</p></div>
   </section>
 </main>
 <footer>
@@ -185,6 +191,28 @@ async function refresh() {
         '<div class="k">Actions taken</div><ul>' + p.actions_taken.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
         '<div class="k">Open items</div><ul>' + p.open_items.map(a => "<li>" + a + "</li>").join("") + '</ul>';
       ebox.appendChild(div);
+    }
+  }
+  const dsp = await api("/disputes");
+  const dbox = document.getElementById("disputes");
+  if (!dsp.disputes.length) {
+    dbox.innerHTML = '<p class="empty">No dispute cases. When a customer disputes a charge, the case — every line and its decision — lands here.</p>';
+  } else {
+    dbox.innerHTML = "";
+    for (const d of dsp.disputes) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const lines = d.lines.map(l => "<li>" + l.description + " — <b>" + l.decision + "</b>" +
+        (l.decision === "declined" && l.reason ? ": " + l.reason : "") +
+        (l.evidence ? " (" + l.evidence + ")" : "") + "</li>").join("");
+      div.innerHTML = "<h3>" + d.case_id + " — " + d.state + "</h3>" +
+        '<div class="k">Account · bill · conversation</div><div>' + d.account_number +
+        " · " + d.bill_id + " · " + d.conversation_id + "</div>" +
+        '<div class="k">Credit applied</div><div>' + d.credit_applied + "</div>" +
+        '<div class="k">Lines</div><ul>' + lines + "</ul>" +
+        (d.decision_basis ? '<div class="k">Basis</div><div>' + d.decision_basis + "</div>" : "") +
+        (d.goodwill_refused_reason ? '<div class="k">Goodwill</div><div>refused — ' + d.goodwill_refused_reason + "</div>" : "");
+      dbox.appendChild(div);
     }
   }
 }

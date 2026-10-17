@@ -135,6 +135,30 @@ def list_actions(conversation_id: str | None = None) -> dict:
                          for a in service.list_actions(conversation_id)]}
 
 
+@app.get("/conversations/{conversation_id}/audit",
+         dependencies=[Depends(require_key)])
+def list_audit(conversation_id: str) -> dict:
+    if service.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"audit": [e.model_dump(mode="json")
+                      for e in service.list_audit(conversation_id)]}
+
+
+@app.get("/disputes", dependencies=[Depends(require_key)])
+def list_disputes(conversation_id: str | None = None,
+                  account_number: str | None = None) -> dict:
+    return {"disputes": [d.model_dump(mode="json") for d in
+                         service.list_disputes(conversation_id, account_number)]}
+
+
+@app.get("/disputes/{case_id}", dependencies=[Depends(require_key)])
+def get_dispute(case_id: str) -> dict:
+    case = service.get_dispute(case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="no such dispute case")
+    return case.model_dump(mode="json")
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")

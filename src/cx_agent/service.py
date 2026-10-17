@@ -53,6 +53,16 @@ class ConversationService:
     def list_actions(self, conversation_id: str | None = None):
         return self.store.list_actions(conversation_id)
 
+    def list_disputes(self, conversation_id: str | None = None,
+                      account_number: str | None = None):
+        return self.store.list_dispute_cases(conversation_id, account_number)
+
+    def get_dispute(self, case_id: str):
+        return self.store.get_dispute_case(case_id)
+
+    def list_audit(self, conversation_id: str):
+        return self.store.list_audit(conversation_id)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)
