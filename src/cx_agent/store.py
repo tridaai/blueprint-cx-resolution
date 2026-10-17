@@ -325,7 +325,7 @@ class InMemoryStore:
             rows = [t for t in rows if t.account_number == account_number]
         if conversation_id:
             rows = [t for t in rows if t.conversation_id == conversation_id]
-        return sorted(rows, key=lambda t: (t.created_date, t.attempt_id))
+        return sorted(rows, key=lambda t: t.created_date)
 
     def save_payment_arrangement(self, a):
         self._put(self.payment_arrangements, a.arrangement_id, a)
@@ -337,7 +337,7 @@ class InMemoryStore:
         rows = self._all(self.payment_arrangements)
         if account_number:
             rows = [a for a in rows if a.account_number == account_number]
-        return sorted(rows, key=lambda a: (a.created_date, a.arrangement_id))
+        return sorted(rows, key=lambda a: a.created_date)
 
     def save_payment_notice(self, n):
         self._put(self.payment_notices, n.notice_id, n)
@@ -553,7 +553,7 @@ class _SqlStore:
             rows = [t for t in rows if t.account_number == account_number]
         if conversation_id:
             rows = [t for t in rows if t.conversation_id == conversation_id]
-        return sorted(rows, key=lambda t: (t.created_date, t.attempt_id))
+        return sorted(rows, key=lambda t: t.created_date)
 
     def save_payment_arrangement(self, a):
         self._save("payment_arrangements", a.arrangement_id, a)
@@ -565,7 +565,7 @@ class _SqlStore:
         rows = self._load_all("payment_arrangements")
         if account_number:
             rows = [a for a in rows if a.account_number == account_number]
-        return sorted(rows, key=lambda a: (a.created_date, a.arrangement_id))
+        return sorted(rows, key=lambda a: a.created_date)
 
     def save_payment_notice(self, n):
         self._save("payment_notices", n.notice_id, n)

@@ -83,6 +83,16 @@ class Policy:
     # it was made, as a compensating pair of records; after that
     # the request goes to the offers team with the change record.
     plan_change_reversal_days: int = 0
+    # Payment arrangements (POL-PAY-01): the smallest balance an
+    # arrangement may be written over, the most installments it
+    # may run to, the smallest installment it may contain, and the
+    # calendar the schedule is laid on — the first date lands
+    # within this many days, the rest follow monthly.
+    arrangement_min_balance: Decimal = Decimal("100.00")
+    arrangement_max_installments: int = 3
+    arrangement_min_installment: Decimal = Decimal("25.00")
+    arrangement_first_due_days: int = 14
+    arrangement_interval_days: int = 30
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -112,6 +122,16 @@ class Policy:
             plan_change_reversal_days=num(
                 "CX_PLAN_CHANGE_REVERSAL_DAYS", base.plan_change_reversal_days
             ),
+            arrangement_min_balance=dec(
+                "CX_ARRANGEMENT_MIN_BALANCE", str(base.arrangement_min_balance)),
+            arrangement_max_installments=num(
+                "CX_ARRANGEMENT_MAX_INSTALLMENTS", base.arrangement_max_installments),
+            arrangement_min_installment=dec(
+                "CX_ARRANGEMENT_MIN_INSTALLMENT", str(base.arrangement_min_installment)),
+            arrangement_first_due_days=num(
+                "CX_ARRANGEMENT_FIRST_DUE_DAYS", base.arrangement_first_due_days),
+            arrangement_interval_days=num(
+                "CX_ARRANGEMENT_INTERVAL_DAYS", base.arrangement_interval_days),
         )
 
 
