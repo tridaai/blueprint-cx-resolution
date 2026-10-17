@@ -124,7 +124,12 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            "retention_outcome", "retention_state", "retention_routed",
            "retention_no_offers", "retention_offer_proposals",
            "retention_offer_mechanism", "retention_offer_outcome",
-           "pending_cancellation_effective"}
+           "pending_cancellation_effective",
+           # Round 15: which incidents a conversation matched and
+           # the known-issue note its handoff packet carried are
+           # record state — exact or failed.
+           "incidents_matched", "packet_incident_ids",
+           "incident_status"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -356,7 +361,20 @@ def check_final(service, scenario: dict, conv_id: str,
     if scenario.get("account"):
         values["pending_cancellation_effective"] = (
             account.pending_cancellation_effective if account else None)
+    # Round 15: the incident matches recorded on this
+    # conversation (the supervisor's audit-backed match list) and
+    # the incident named by a scenario for a status read.
+    inc_matches = ((conv.specialist_state.get("incidents") or {})
+                   .get("matches", []) if conv else [])
+    values["incidents_matched"] = sorted(
+        {m["incident_id"] for m in inc_matches})
+    values["incident_matches_count"] = len(inc_matches)
+    if scenario.get("incident"):
+        named = store.get_incident(scenario["incident"])
+        values["incident_status"] = named.status if named else None
     packet = escalations[-1].packet if escalations else None
+    values["packet_incident_ids"] = [
+        k["incident_id"] for k in (packet.known_incidents if packet else [])]
     values["packet_signal_effort"] = (
         packet.signals.get("effort_score") if packet else None)
     values["packet_signal_trend"] = (
@@ -419,13 +437,29 @@ def apply_poke(service, poke: dict) -> None:
         # breached complaint lands in the queue before the
         # customer's next message.
         service.run_complaint_watch()
+    if poke.get("resolve_incident"):
+        # The operator resolves an incident between contacts:
+        # from the next turn on it matches nothing, including in
+        # this live conversation.
+        from cx_agent import incidents as incidents_mod
+
+        incidents_mod.resolve_incident(
+            service.store, poke["resolve_incident"], actor="eval")
+    if poke.get("add_incident"):
+        # The operator opens an incident between contacts: a walk
+        # already running for that fault meets it on the next turn.
+        from cx_agent import incidents as incidents_mod
+
+        incidents_mod.add_incident(
+            service.store, actor="eval", **poke["add_incident"])
     account_number = poke.get("account")
     if account_number:
         account = store.get_account(account_number)
         for key, value in poke.items():
             if key in ("account", "age_actions_days", "run_autopay",
                        "break_arrangements", "age_complaints_days",
-                       "run_complaint_watch"):
+                       "run_complaint_watch", "resolve_incident",
+                       "add_incident"):
                 continue
             if key in ("balance_due", "roaming_gb_used", "credit_balance"):
                 value = Decimal(str(value))
