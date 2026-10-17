@@ -90,3 +90,38 @@ def test_callbacks_and_procedure_runs_endpoints():
     assert len(runs) == 1
     assert runs[0]["state"] == "dead_ended"
     assert runs[0]["procedure_version"] == 1
+
+
+def test_complaint_feedback_and_mining_endpoints():
+    client = TestClient(app)
+    client.post("/seed")
+    conv = client.post("/conversations").json()
+    cid = conv["conversation_id"]
+    client.post(f"/conversations/{cid}/messages", json={
+        "text": "I want to make a complaint — your engineer never "
+                "showed up for Tuesday's appointment. My account "
+                "is NB-1003."})
+    complaints = client.get("/complaints").json()["complaints"]
+    assert len(complaints) == 1
+    assert complaints[0]["category"] == "appointment"
+    assert complaints[0]["sla_state"] == "open"
+    one = client.get(f"/complaints/{complaints[0]['complaint_id']}")
+    assert one.status_code == 200
+    assert one.json()["text"].startswith("I want to make a complaint")
+    assert client.get("/complaints/CMP-NOPE").status_code == 404
+    watch = client.post("/complaints/watch").json()
+    assert watch["raised"] == []  # nothing is past its deadline yet
+
+    conv2 = client.post("/conversations").json()
+    client.post(f"/conversations/{conv2['conversation_id']}/messages",
+                json={"text": "Some feedback: the engineer was "
+                              "brilliant, honestly."})
+    feedback = client.get("/feedback").json()["feedback"]
+    assert len(feedback) == 1 and feedback[0]["kind"] == "compliment"
+
+    conv3 = client.post("/conversations").json()
+    client.post(f"/conversations/{conv3['conversation_id']}/messages",
+                json={"text": "Can I buy a gift card for my daughter?"})
+    mining = client.get("/care/mining").json()
+    assert mining["unhandled_utterances"] >= 1
+    assert mining["candidates"] == []  # one utterance is no cluster
