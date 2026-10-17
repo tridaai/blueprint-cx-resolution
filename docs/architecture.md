@@ -154,7 +154,7 @@ transactional desk on a guess.
 |---|---|---|
 | billing | bill history, dispute cases, credit policy + trailing credit history | `apply_credit` (dispute or goodwill class) |
 | roaming | account roaming state, offer catalogue, fair-use policy | `activate_offer` (Roam Pass) |
-| offers | plan catalogue, loyalty offer, proration engine | `change_plan` |
+| offers | plan catalogue, loyalty offer, cycle calendar, change history | `change_plan` (and its reversal) |
 | technical | procedure step-graphs, coverage/allowance checks | `book_callback` |
 | account | account record, balance, arrangement policy | `update_payment_method`, `payment_arrangement` |
 | care | policy corpus retrieval | — (answers, or logs an unhandled intent) |
@@ -177,6 +177,50 @@ a separate tier with a memory: the account's executed credits in
 the trailing 90 days bound what may be offered, a refusal is
 recorded with its reason, and the evidenced path is never
 throttled by the goodwill history.
+
+## Plan-change transactions
+
+A plan change moves a customer between price points, so the
+offers desk works to transaction rules the other desks don't
+need (`plan_changes.py`). The **quote** is computed from the
+account's real cycle calendar — `cycle_start` / `cycle_end` on
+the record, the shared clock for today — by
+`money.plan_change_for_cycle`: credit for the unused days of the
+old plan at its daily rate, charge for the remaining days of the
+new one, the net, and the projected next bill (the net adjustment
+plus the first full month at the new price), every figure Decimal
+and stated in the proposal before anything is confirmed.
+
+**Effective dates are policy.** An upgrade (the effective price
+rises) starts immediately, prorated as above. A downgrade starts
+at the next cycle boundary: no proration, the customer keeps the
+plan they've paid for, and confirming the proposal *schedules*
+the change on the account (`pending_plan_id`,
+`pending_plan_effective`) — the live plan does not move. A
+downgrade or cancellation the customer blames on a fault is not
+priced at all: it escalates to the billing queue, whose dispute
+path owns fault-driven exits.
+
+A proposal is a **versioned record stamped with a fingerprint**
+of the account state it was priced against (plan, cycle dates,
+balance, any scheduled change — the parts ride the payload next
+to their hash). Execution re-derives the fingerprint from the
+live account and refuses a mismatch as `stale_proposal`: the
+supervisor marks the proposal superseded with the reason, and
+the desk re-quotes the same request from live state, leading
+with what moved, for a fresh confirmation. A "yes" can therefore
+never spend figures the account has outgrown.
+
+A completed change can be **reversed inside the policy window**
+(`plan_change_reversal_days`; the same day by default) as a
+**compensating pair**: one record restores the old plan (or
+cancels the schedule, for a downgrade that never landed), a
+second unwinds the money by the exact inverse of the original
+net — both stamped with the original's id, which is itself never
+edited. The window is re-checked at execution, not trusted from
+proposal time. Outside the window the desk escalates to the
+offers queue with the change record attached; the agent does not
+improvise a reversal policy won't cover.
 
 ## The troubleshooting engine
 
@@ -282,7 +326,7 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 47 scripted
+The eval pack grades trajectories, not replies: 52 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
@@ -300,7 +344,14 @@ visit, a reported speed taking the fault path below threshold
 and the resolved path above it, a dead-ended procedure whose
 callback record carries every step's result, a walk resumed at
 its exact step after a billing detour, and a safety step that
-refuses a skip. The rubrics encode the production rules:
+refuses a skip. Round 5 adds the plan-change transactions: an
+upgrade priced to the cent off the cycle calendar, a downgrade
+that schedules at the boundary and moves nothing, a proposal
+the world outruns — refused as stale, re-quoted, and only then
+executed — and a reversal inside its window restoring plan and
+money as a compensating pair, with the same request outside the
+window routed to the offers queue. The rubrics encode the
+production rules:
 
 - **escalation** — first ask is an attempt, second is a transfer;
   stuck is a transfer; threat/fraud/legal/vulnerable are immediate.
@@ -349,8 +400,9 @@ LLM backend, and whether S3 is configured.
 
 ## Round map
 
-This document describes rounds 1–3 (core; rerouting and
-clarification; billing depth). The scheduled deepening — the
+This document describes rounds 1–5 (core; rerouting and
+clarification; billing depth; the troubleshooting engine;
+plan-change transactions). The scheduled deepening — the
 retention flow, failure attribution and the annotation queue,
 conversation-signal extraction, the daily quality pass, the
 prompt registry, handoff scoring, cost budgets — is laid out in

@@ -105,8 +105,13 @@ open http://localhost:8000              # the operator console
   is past the ceiling. The warning precedes any chargeable offer,
   by rule.
 - **Offers & plan changes** — eligibility and proration computed
-  in code; the customer sees the credit, the charge and the net
-  before confirming anything.
+  in code, off the account's real cycle calendar: the customer
+  sees the credit, the charge, the net and the projected next
+  bill before confirming anything. Upgrades start now; a
+  downgrade schedules at the next cycle boundary with no
+  proration. A change can be reversed the same day it was made;
+  a downgrade blamed on a fault is routed to the billing desk's
+  dispute path, not priced as an exit.
 - **Technical support** — guided procedures as versioned data,
   walked by one engine: agent-side checks (coverage, allowance,
   a network line test) run as tools whose results branch the
@@ -151,6 +156,15 @@ open http://localhost:8000              # the operator console
   can only ever run after being re-made and re-confirmed at the
   new desk, so a stray "yes" to a later question can never fire
   a stale action.
+- **Fresh figures only** — a plan proposal is a versioned record
+  stamped with a fingerprint of the account state it was priced
+  against. If the account moves before the customer answers —
+  a payment lands, another action executes — execution refuses
+  the proposal as stale, marks it on the books, and the desk
+  re-quotes the same request from live state for a fresh
+  confirmation. Reversals never edit history: a reversal is a
+  compensating pair of records (the plan restored, the money
+  unwound) pointing back at the original change.
 - **Asking, not guessing** — when two desks tie on a real signal,
   the agent asks one targeted clarifying question offering both
   readings in plain words; if the customer doesn't answer it, the
@@ -165,7 +179,7 @@ open http://localhost:8000              # the operator console
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **37 scripted multi-turn conversations** played by
+behavioral: **52 scripted multi-turn conversations** played by
 persona drivers (the refund seeker, the human-demander, the
 fragment writer, the AI skeptic, the confused elder, non-native
 phrasing) against the real service, graded with pass/fail rubric
@@ -173,18 +187,18 @@ assertions — escalation, education, grounding, transaction,
 identity, care. The gate requires **100% on zero-tolerance
 assertions** (escalation decisions, whether an action executed,
 exact money and identity state) and **≥95% overall**. Current
-state of the tree: 196/196 assertions, 109/109 zero-tolerance.
+state of the tree: 350/350 assertions, 230/230 zero-tolerance.
 
 ```bash
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (84 tests) covers the deterministic core —
+The pytest suite (118 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
-routing, rerouting and clarification, billing depth, store
-conformance across the SQLite and in-memory profiles (the
-PostgreSQL leg runs when `CX_TEST_DATABASE_URL` names a scratch
-database).
+routing, rerouting and clarification, billing depth, plan-change
+transactions, store conformance across the SQLite and in-memory
+profiles (the PostgreSQL leg runs when `CX_TEST_DATABASE_URL`
+names a scratch database).
 
 ## Layout
 
@@ -204,6 +218,8 @@ src/cx_agent/
   documents.py     the deterministic hashing embedder (384-dim)
   llm.py           the provider boundary + offline composer
   money.py         Decimal money math: proration, credits
+  plan_changes.py  plan-change transactions: cycle-calendar quotes,
+                   effective dates, proposal fingerprints, reversals
   billing_book.py  the billing ledger: decomposition, comparison,
                    bill shock, per-line dispute cases, credit history
   procedures.py    the troubleshooting engine: procedures as
@@ -216,7 +232,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (47 trajectories) + run_evals.py
+evals/             scenarios.jsonl (52 trajectories) + run_evals.py
 tests/             the pytest suite
 docs/architecture.md  the full design
 ```
