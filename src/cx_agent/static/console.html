@@ -80,6 +80,8 @@
     <div id="disputes"><p class="empty">No dispute cases. When a customer disputes a charge, the case — every line and its decision — lands here.</p></div>
     <h2 style="margin-top:22px">Technician callbacks</h2>
     <div id="callbacks"><p class="empty">No callbacks. When a guided procedure runs out of steps, the callback booked for the technician — with the full step transcript — lands here.</p></div>
+    <h2 style="margin-top:22px">Roaming fair-use notices</h2>
+    <div id="notices"><p class="empty">No fair-use notices. When a roaming customer crosses 80% or 100% of the fair-use ceiling, the proactive warning — figures and all — lands here.</p></div>
   </section>
 </main>
 <footer>
@@ -235,6 +237,25 @@ async function refresh() {
         '<div class="k">Reason</div><div>' + c.reason + "</div>" +
         '<div class="k">Step transcript</div><ul>' + steps + "</ul>";
       cbox.appendChild(div);
+    }
+  }
+  const ntc = await api("/roaming/notices");
+  const nbox = document.getElementById("notices");
+  if (!ntc.notices.length) {
+    nbox.innerHTML = '<p class="empty">No fair-use notices. When a roaming customer crosses 80% or 100% of the fair-use ceiling, the proactive warning — figures and all — lands here.</p>';
+  } else {
+    nbox.innerHTML = "";
+    for (const n of ntc.notices) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>" + n.notice_id + " — " + n.kind.replace("fair_use_", "fair use ") + "%</h3>" +
+        '<div class="k">Account · destination · raised</div><div>' + n.account_number +
+        " · " + (n.destination || "—") + " · " + n.created_date + "</div>" +
+        '<div class="k">Usage</div><div>' + n.used_gb + " GB of " + n.cap_gb + " GB (" + n.pct + "%)" +
+        (n.projected_overage_cost ? " · projected overage $" + n.projected_overage_cost : "") + "</div>" +
+        (n.unwarned_crossing ? '<div class="k">Policy event</div><div>crossed 100% with no earlier warning on record</div>' : "") +
+        '<div class="k">Summary shown</div><div>' + n.summary + "</div>";
+      nbox.appendChild(div);
     }
   }
 }

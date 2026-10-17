@@ -69,6 +69,9 @@ class ConversationService:
     def list_procedure_runs(self, conversation_id: str | None = None):
         return self.store.list_procedure_runs(conversation_id)
 
+    def list_roaming_notices(self, account_number: str | None = None):
+        return self.store.list_roaming_notices(account_number)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)

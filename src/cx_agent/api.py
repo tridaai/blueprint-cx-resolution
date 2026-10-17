@@ -179,6 +179,12 @@ def list_procedure_runs(conversation_id: str | None = None) -> dict:
                                service.list_procedure_runs(conversation_id)]}
 
 
+@app.get("/roaming/notices", dependencies=[Depends(require_key)])
+def list_roaming_notices(account_number: str | None = None) -> dict:
+    return {"notices": [n.model_dump(mode="json") for n in
+                        service.list_roaming_notices(account_number)]}
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")
