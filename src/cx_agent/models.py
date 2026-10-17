@@ -537,6 +537,53 @@ class FeedbackRecord(BaseModel):
     created_date: str = ""  # ISO date
 
 
+class AttributionRecord(BaseModel):
+    """Why a conversation ended the way it did — computed in code
+    from its own audit trail at close, never judged by a model.
+
+    `outcome` is what happened (resolved, with or without an
+    executed action; escalated; or ended unresolved). For a
+    non-resolved outcome, `cause` names the one primary cause from
+    the governed taxonomy in attribution.py — or is None when the
+    ending was the designed behaviour (a threat, a second ask for
+    a human) or no rule had anything true to say. `rule` always
+    names the exact rule that fired, and `evidence` carries the
+    signals it read — the reroute count, the escalation reason,
+    the block reasons — so the attribution is explainable from the
+    record alone."""
+
+    conversation_id: str
+    outcome: str  # resolved | resolved_with_action | escalated
+    #             | unresolved_ended
+    cause: str | None = None  # the taxonomy lives in attribution.py
+    rule: str = ""  # the rule that fired, e.g. "dispute_above_cap"
+    desk: str = ""  # the desk that owned the conversation at the end
+    evidence: dict = Field(default_factory=dict)
+    attributed_date: str = ""  # ISO date the record was computed
+
+
+class AnnotationRecord(BaseModel):
+    """One human's judgement on one conversation's attribution —
+    the annotation queue's unit of work. The annotator says
+    whether the attributed cause is right; when it isn't, the
+    corrected cause comes from the same taxonomy (required then,
+    forbidden otherwise). A second annotation must come from a
+    different annotator; when the first two disagree, a third —
+    the verdict, from a third person — settles it, and the record
+    is closed. `seq` is the store-wide creation order, so "the
+    first two" means the same thing on every store."""
+
+    annotation_id: str
+    conversation_id: str
+    annotator: str
+    cause_correct: bool
+    corrected_cause: str | None = None
+    note: str = ""
+    is_verdict: bool = False
+    seq: int = 0
+    created_date: str = ""  # ISO date
+
+
 class Finding(BaseModel):
     """One structured fact a specialist established with a tool. The
     supervisor's reply may only assert what findings (or retrieved

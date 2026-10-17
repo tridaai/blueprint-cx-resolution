@@ -43,6 +43,8 @@ from .documents import EMBEDDING_DIM
 from .models import (
     Account,
     ActionRecord,
+    AnnotationRecord,
+    AttributionRecord,
     AuditEvent,
     Bill,
     CallbackRecord,
@@ -183,6 +185,12 @@ class Store(Protocol):
                            account_number: str | None = None) -> list[DisputeCase]: ...
     def save_escalation(self, e: Escalation) -> None: ...
     def list_escalations(self) -> list[Escalation]: ...
+    def save_attribution(self, r: AttributionRecord) -> None: ...
+    def get_attribution(self, conversation_id: str) -> AttributionRecord | None: ...
+    def list_attributions(self) -> list[AttributionRecord]: ...
+    def save_annotation(self, a: AnnotationRecord) -> None: ...
+    def list_annotations(self, conversation_id: str | None = None
+                         ) -> list[AnnotationRecord]: ...
     def save_audit(self, e: AuditEvent) -> None: ...
     def list_audit(self, conversation_id: str) -> list[AuditEvent]: ...
     def count_customers(self) -> int: ...
@@ -214,6 +222,8 @@ class InMemoryStore:
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
         self.escalations: dict[str, Escalation] = {}
+        self.attributions: dict[str, AttributionRecord] = {}
+        self.annotations: dict[str, AnnotationRecord] = {}
         self.audit: list[AuditEvent] = []
 
     def _put(self, table: dict, key: str, model) -> None:
@@ -408,6 +418,25 @@ class InMemoryStore:
     def save_escalation(self, e): self._put(self.escalations, e.escalation_id, e)
     def list_escalations(self): return self._all(self.escalations)
 
+    def save_attribution(self, r):
+        self._put(self.attributions, r.conversation_id, r)
+
+    def get_attribution(self, conversation_id):
+        return self._get(self.attributions, conversation_id)
+
+    def list_attributions(self):
+        return sorted(self._all(self.attributions),
+                      key=lambda r: r.conversation_id)
+
+    def save_annotation(self, a):
+        self._put(self.annotations, a.annotation_id, a)
+
+    def list_annotations(self, conversation_id=None):
+        rows = self._all(self.annotations)
+        if conversation_id:
+            rows = [a for a in rows if a.conversation_id == conversation_id]
+        return sorted(rows, key=lambda a: a.seq)
+
     def save_audit(self, e):
         with self._lock:
             self.audit.append(copy.deepcopy(e))
@@ -446,6 +475,8 @@ _TABLES = {
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
     "escalations": ("escalation_id", Escalation),
+    "attributions": ("conversation_id", AttributionRecord),
+    "annotations": ("annotation_id", AnnotationRecord),
 }
 
 
@@ -660,6 +691,25 @@ class _SqlStore:
 
     def save_escalation(self, e): self._save("escalations", e.escalation_id, e)
     def list_escalations(self): return self._load_all("escalations")
+
+    def save_attribution(self, r):
+        self._save("attributions", r.conversation_id, r)
+
+    def get_attribution(self, conversation_id):
+        return self._load("attributions", conversation_id)
+
+    def list_attributions(self):
+        return sorted(self._load_all("attributions"),
+                      key=lambda r: r.conversation_id)
+
+    def save_annotation(self, a):
+        self._save("annotations", a.annotation_id, a)
+
+    def list_annotations(self, conversation_id=None):
+        rows = self._load_all("annotations")
+        if conversation_id:
+            rows = [a for a in rows if a.conversation_id == conversation_id]
+        return sorted(rows, key=lambda a: a.seq)
 
     def save_audit(self, e):
         self._execute(
