@@ -170,3 +170,38 @@ def test_procedure_versions_runs_and_callbacks(kind, tmp_path):
     assert store.list_callbacks(conversation_id="CONV-T")[0].callback_id == "CBK-T1"
     assert store.list_callbacks() != []
     assert store.get_callback("CBK-NONE") is None
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_roaming_rates_and_notices(kind, tmp_path):
+    """Round 6 records behave identically on every store: rates
+    key on the destination (case-insensitively), and notices
+    round-trip with their Decimal figures and the unwarned flag."""
+    from cx_agent.models import RoamingNotice, RoamingRate
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+
+    store.save_roaming_rate(RoamingRate(destination="Spain",
+                                        per_gb=Decimal("8.50")))
+    loaded = store.get_roaming_rate("spain")
+    assert loaded is not None and loaded.per_gb == Decimal("8.50")
+    assert store.get_roaming_rate("Atlantis") is None
+    assert [r.destination for r in store.list_roaming_rates()] == ["Spain"]
+
+    notice = RoamingNotice(
+        notice_id="NTF-T1", account_number="NB-T", kind="fair_use_100",
+        destination="Spain", trip_start="2026-09-28",
+        used_gb=Decimal("26"), cap_gb=Decimal("25"), pct=Decimal("104.0"),
+        projected_overage_cost=Decimal("340.00"),
+        summary="Fair-use warning…", conversation_id="CONV-T",
+        unwarned_crossing=True, created_date="2026-10-01")
+    store.save_roaming_notice(notice)
+    rows = store.list_roaming_notices("NB-T")
+    assert len(rows) == 1
+    assert rows[0].projected_overage_cost == Decimal("340.00")
+    assert rows[0].unwarned_crossing is True
+    assert store.list_roaming_notices("NB-OTHER") == []
+    assert len(store.list_roaming_notices()) == 1
