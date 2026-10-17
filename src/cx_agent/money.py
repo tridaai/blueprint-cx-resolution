@@ -7,6 +7,7 @@ explain one this module produced.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 CENT = Decimal("0.01")
@@ -51,3 +52,31 @@ def plan_change_net(old_price: Decimal, new_price: Decimal,
         "days_remaining": days_remaining,
         "days_in_cycle": days_in_cycle,
     }
+
+
+def plan_change_for_cycle(old_price: Decimal, new_price: Decimal,
+                          cycle_start: date, cycle_end: date,
+                          on: date) -> dict:
+    """plan_change_net read off the real cycle calendar.
+
+    The cycle runs cycle_start..cycle_end inclusive; `on` is the
+    day of the change. Day counts come from the dates alone: the
+    customer has used the days up to and including `on`, and is
+    credited / charged for the days after it — the same split the
+    day-count form computes when the position is expressed as a
+    cycle_day, so the two forms can never disagree. A change dated
+    outside the cycle clamps to its edges rather than inventing
+    days."""
+    days_in_cycle = (cycle_end - cycle_start).days + 1
+    if days_in_cycle <= 0:
+        raise ValueError("cycle_end must not precede cycle_start")
+    days_remaining = (cycle_end - on).days
+    days_remaining = max(0, min(days_in_cycle, days_remaining))
+    story = plan_change_net(old_price, new_price,
+                            days_remaining, days_in_cycle)
+    story.update({
+        "cycle_start": cycle_start.isoformat(),
+        "cycle_end": cycle_end.isoformat(),
+        "days_used": days_in_cycle - days_remaining,
+    })
+    return story

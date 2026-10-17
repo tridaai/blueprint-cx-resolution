@@ -295,6 +295,15 @@ def build_policies() -> list[PolicyDocument]:
          "the new plan, to the day. The new monthly price applies in full "
          "from the next cycle. The customer confirms the change, and the "
          "prorated figures, before anything is applied."),
+        ("POL-PLAN-02", "When a plan change starts, and undoing one", "plans",
+         "An upgrade — moving to a higher-priced plan — starts straight away "
+         "and is prorated to the day. A downgrade starts at the next cycle "
+         "instead: there is no proration on a downgrade, and the customer "
+         "keeps the plan they have paid for until the cycle ends. A customer "
+         "who wants to leave or downgrade because of a fault is handled by "
+         "the billing team under the dispute policy, not by the plan-change "
+         "desk. A plan change can be reversed on the day it was made; "
+         "after that day, reversing it is the offers team's decision."),
         ("POL-ID-01", "Verifying your identity", "identity",
          "Before any change to an account or its money, identity is verified "
          "with three things: the account number, the postcode on the account, "

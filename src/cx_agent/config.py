@@ -72,6 +72,11 @@ class Policy:
     # Asks-for-a-human tolerated before escalation: the first ask gets
     # one genuine solve attempt, the second escalates.
     human_requests_before_escalation: int = 2
+    # The plan-change reversal window, in days past the day the
+    # change was made. Zero — a change can be reversed the same day
+    # it was made, as a compensating pair of records; after that
+    # the request goes to the offers team with the change record.
+    plan_change_reversal_days: int = 0
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -95,6 +100,9 @@ class Policy:
             otp_max_attempts=num("CX_OTP_MAX_ATTEMPTS", base.otp_max_attempts),
             human_requests_before_escalation=num(
                 "CX_HUMAN_REQUESTS_BEFORE_ESCALATION", base.human_requests_before_escalation
+            ),
+            plan_change_reversal_days=num(
+                "CX_PLAN_CHANGE_REVERSAL_DAYS", base.plan_change_reversal_days
             ),
         )
 
