@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from . import roaming_book
+from .routing import classify_confirmation
 from .billing_book import (
     assess_dispute,
     bill_shock,
@@ -462,6 +463,26 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 
     rate_row = roaming_book.find_destination(ctx.store, text)
     days = _parse_days(text)
+    state = conv.specialist_state.setdefault("roaming", {})
+
+    # A guard turn ends by inviting the customer to decide on the
+    # pass — and it holds the floor for that decision (the
+    # supervisor routes the next turn back here). An assent or a
+    # buy verb completes the purchase path the guard deferred; a
+    # refusal closes it with nothing added; anything else is a
+    # new topic and falls through to be handled on its own terms.
+    if state.pop("awaiting_decision", None) == "activate_pass":
+        verdict = classify_confirmation(text)
+        if verdict == "decline":
+            return result(
+                findings=[Finding(
+                    topic="guard_declined",
+                    text=("No problem — I haven't added anything, and "
+                          "nothing has been charged. The figures stand "
+                          "if you change your mind."))],
+                progress=True)
+        if verdict == "confirm" or strong_buy or soft_buy:
+            strong_buy = True
 
     # Planning: a destination is named and the customer is asking
     # what it costs — with a length, or in cost words. A bare
@@ -484,13 +505,15 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                 progress=True)
         findings = [Finding(topic="trip_quote", text=_quote_text(quote))]
         citations = _cite(ctx, "roaming", "roam pass price projection warning")
-        state = conv.specialist_state.setdefault("roaming", {})
         if quote.shock and not state.get("projection_shown"):
             # The bill-shock guard: the projection and comparison
             # lead, and nothing chargeable is proposed until the
             # customer has seen them. The withholding is the rule,
             # not a style — the proposal is simply not made.
             state["projection_shown"] = True
+            if quote.cheaper == "pass":
+                state["awaiting_decision"] = "activate_pass"
+                conv.specialist_state["force_intent"] = "roaming"
             findings.append(Finding(
                 topic="bill_shock_guard",
                 text=("That pay-as-you-go projection is past the point "
@@ -529,12 +552,13 @@ def roaming(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                 "fair-use ceiling, so speeds are already reduced and "
                 "further data is charged per GB.")
             if over_cost is not None and over_cost > ctx.policy.roaming_bill_shock_amount:
-                state = conv.specialist_state.setdefault("roaming", {})
                 if not state.get("projection_shown"):
                     # The same guard, fired from actual usage: the
                     # overage already run up leads, and the sale
                     # waits a turn.
                     state["projection_shown"] = True
+                    state["awaiting_decision"] = "activate_pass"
+                    conv.specialist_state["force_intent"] = "roaming"
                     guard = (
                         f"{warning} The {roaming_book.gb(over_gb)} past the "
                         f"ceiling at {account.roaming_country} rates "
