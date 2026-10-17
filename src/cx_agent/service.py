@@ -229,6 +229,7 @@ class ConversationService:
             # propagates — nothing here swallows it.
             self.store.save_conversation(conv)
             self.store.save_audit(AuditEvent(
+                event_id=f"EVT-{uuid.uuid4().hex[:10]}",
                 conversation_id=conv.conversation_id, kind="system",
                 detail={"event": "internal_error",
                         "error": f"{type(exc).__name__}: {exc}"},
