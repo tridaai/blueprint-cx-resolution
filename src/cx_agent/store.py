@@ -51,6 +51,9 @@ from .models import (
     DisputeCase,
     Escalation,
     Offer,
+    PaymentArrangement,
+    PaymentAttempt,
+    PaymentNotice,
     Plan,
     PolicyDocument,
     Procedure,
@@ -144,6 +147,18 @@ class Store(Protocol):
     def save_roaming_notice(self, n: RoamingNotice) -> None: ...
     def list_roaming_notices(self, account_number: str | None = None
                              ) -> list[RoamingNotice]: ...
+    def save_payment_attempt(self, t: PaymentAttempt) -> None: ...
+    def list_payment_attempts(self, account_number: str | None = None,
+                              conversation_id: str | None = None
+                              ) -> list[PaymentAttempt]: ...
+    def save_payment_arrangement(self, a: PaymentArrangement) -> None: ...
+    def get_payment_arrangement(self, arrangement_id: str
+                                ) -> PaymentArrangement | None: ...
+    def list_payment_arrangements(self, account_number: str | None = None
+                                  ) -> list[PaymentArrangement]: ...
+    def save_payment_notice(self, n: PaymentNotice) -> None: ...
+    def list_payment_notices(self, account_number: str | None = None
+                             ) -> list[PaymentNotice]: ...
 
     # conversation records
     def save_conversation(self, c: Conversation) -> None: ...
@@ -179,6 +194,9 @@ class InMemoryStore:
         self.callbacks: dict[str, CallbackRecord] = {}
         self.roaming_rates: dict[str, RoamingRate] = {}
         self.roaming_notices: dict[str, RoamingNotice] = {}
+        self.payment_attempts: dict[str, PaymentAttempt] = {}
+        self.payment_arrangements: dict[str, PaymentArrangement] = {}
+        self.payment_notices: dict[str, PaymentNotice] = {}
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
@@ -297,6 +315,39 @@ class InMemoryStore:
         if account_number:
             rows = [n for n in rows if n.account_number == account_number]
         return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
+
+    def save_payment_attempt(self, t):
+        self._put(self.payment_attempts, t.attempt_id, t)
+
+    def list_payment_attempts(self, account_number=None, conversation_id=None):
+        rows = self._all(self.payment_attempts)
+        if account_number:
+            rows = [t for t in rows if t.account_number == account_number]
+        if conversation_id:
+            rows = [t for t in rows if t.conversation_id == conversation_id]
+        return sorted(rows, key=lambda t: (t.created_date, t.attempt_id))
+
+    def save_payment_arrangement(self, a):
+        self._put(self.payment_arrangements, a.arrangement_id, a)
+
+    def get_payment_arrangement(self, arrangement_id):
+        return self._get(self.payment_arrangements, arrangement_id)
+
+    def list_payment_arrangements(self, account_number=None):
+        rows = self._all(self.payment_arrangements)
+        if account_number:
+            rows = [a for a in rows if a.account_number == account_number]
+        return sorted(rows, key=lambda a: (a.created_date, a.arrangement_id))
+
+    def save_payment_notice(self, n):
+        self._put(self.payment_notices, n.notice_id, n)
+
+    def list_payment_notices(self, account_number=None):
+        rows = self._all(self.payment_notices)
+        if account_number:
+            rows = [n for n in rows if n.account_number == account_number]
+        return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
+
     def save_conversation(self, c): self._put(self.conversations, c.conversation_id, c)
     def get_conversation(self, cid): return self._get(self.conversations, cid)
     def list_conversations(self): return self._all(self.conversations)
@@ -351,6 +402,9 @@ _TABLES = {
     "callbacks": ("callback_id", CallbackRecord),
     "roaming_rates": ("destination", RoamingRate),
     "roaming_notices": ("notice_id", RoamingNotice),
+    "payment_attempts": ("attempt_id", PaymentAttempt),
+    "payment_arrangements": ("arrangement_id", PaymentArrangement),
+    "payment_notices": ("notice_id", PaymentNotice),
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
@@ -489,6 +543,39 @@ class _SqlStore:
         if account_number:
             rows = [n for n in rows if n.account_number == account_number]
         return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
+
+    def save_payment_attempt(self, t):
+        self._save("payment_attempts", t.attempt_id, t)
+
+    def list_payment_attempts(self, account_number=None, conversation_id=None):
+        rows = self._load_all("payment_attempts")
+        if account_number:
+            rows = [t for t in rows if t.account_number == account_number]
+        if conversation_id:
+            rows = [t for t in rows if t.conversation_id == conversation_id]
+        return sorted(rows, key=lambda t: (t.created_date, t.attempt_id))
+
+    def save_payment_arrangement(self, a):
+        self._save("payment_arrangements", a.arrangement_id, a)
+
+    def get_payment_arrangement(self, arrangement_id):
+        return self._load("payment_arrangements", arrangement_id)
+
+    def list_payment_arrangements(self, account_number=None):
+        rows = self._load_all("payment_arrangements")
+        if account_number:
+            rows = [a for a in rows if a.account_number == account_number]
+        return sorted(rows, key=lambda a: (a.created_date, a.arrangement_id))
+
+    def save_payment_notice(self, n):
+        self._save("payment_notices", n.notice_id, n)
+
+    def list_payment_notices(self, account_number=None):
+        rows = self._load_all("payment_notices")
+        if account_number:
+            rows = [n for n in rows if n.account_number == account_number]
+        return sorted(rows, key=lambda n: (n.created_date, n.notice_id))
+
     def save_conversation(self, c): self._save("conversations", c.conversation_id, c)
     def get_conversation(self, cid): return self._load("conversations", cid)
     def list_conversations(self): return self._load_all("conversations")

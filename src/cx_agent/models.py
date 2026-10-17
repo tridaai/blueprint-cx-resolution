@@ -118,7 +118,20 @@ class Account(BaseModel):
     plan_id: str
     status: str = "active"  # active | suspended | cancelled
     balance_due: Decimal = Decimal("0")
+    # Money Northbeam owes the customer (an overpayment, a credit
+    # left after cancellation). Refunds are computed from this —
+    # never from a figure named in conversation.
+    credit_balance: Decimal = Decimal("0")
     payment_method_last4: str | None = None
+    # Autopay draws the balance from the method on file when the
+    # bill lands; the state lives here, the attempts are records.
+    autopay_enabled: bool = False
+    # The processor double's reading for the method on file: the
+    # decline code it returns ("" approves). A test double, like
+    # the one-time code — a deployment swaps it for the real
+    # processor behind payments_book.process_payment. Replacing
+    # the card clears it: a new method has no history.
+    processor_code: str = ""
     roaming_country: str | None = None  # set while the customer travels
     roaming_gb_used: Decimal = Decimal("0")
     roaming_since: str = ""  # ISO date the current trip began
@@ -325,6 +338,9 @@ class ActionKind(str, Enum):
     UPDATE_PAYMENT_METHOD = "update_payment_method"
     BOOK_CALLBACK = "book_callback"
     PAYMENT_ARRANGEMENT = "payment_arrangement"
+    TAKE_PAYMENT = "take_payment"
+    REFUND_PAYMENT = "refund_payment"
+    SET_AUTOPAY = "set_autopay"
 
 
 # Actions that change money or the account itself. They need verified
@@ -335,6 +351,9 @@ CONSEQUENTIAL_ACTIONS = {
     ActionKind.CHANGE_PLAN,
     ActionKind.UPDATE_PAYMENT_METHOD,
     ActionKind.PAYMENT_ARRANGEMENT,
+    ActionKind.TAKE_PAYMENT,
+    ActionKind.REFUND_PAYMENT,
+    ActionKind.SET_AUTOPAY,
 }
 
 
@@ -401,6 +420,77 @@ class DisputeCase(BaseModel):
     goodwill_refused_reason: str = ""
     created_date: str = ""  # ISO date
     updated_date: str = ""
+
+
+class PaymentAttempt(BaseModel):
+    """One run of a payment against the method on file — approved
+    or declined, with the processor's reason code when it declined
+    and the class the code falls into. The attempt log is what the
+    desk diagnoses from, and what the retry rules read: a HARD
+    decline on a method is a fact about that method, and no later
+    conversation may spend a customer's patience retrying it."""
+
+    attempt_id: str
+    conversation_id: str = ""
+    account_number: str
+    method_last4: str = ""
+    amount: Decimal = Decimal("0")
+    outcome: str = "approved"  # approved | declined
+    reason_code: str = ""  # the processor's code, when declined
+    decline_class: str = ""  # soft | hard, when declined
+    source: str = "manual"  # manual | autopay
+    action_id: str = ""  # the action record that ran it, if any
+    created_date: str = ""  # ISO date
+
+
+class ArrangementInstallment(BaseModel):
+    """One dated slice of a payment arrangement. paid_amount is
+    what payments have covered so far; the installment is paid
+    when the two meet, and missed when its date passes short."""
+
+    number: int
+    amount: Decimal
+    due_date: str  # ISO date
+    paid_amount: Decimal = Decimal("0")
+    paid_date: str = ""  # ISO date the slice was fully covered
+
+
+class PaymentArrangement(BaseModel):
+    """A promise-to-pay as a record of its own — the sibling of
+    the dispute case. The schedule (amounts and dates) is computed
+    in code under the arrangement policy; the state is derived
+    from the installments and the calendar, never asserted:
+    completed when every slice is covered, broken when a date
+    passes with its slice short, active otherwise. A broken
+    arrangement is a human's case — the agent does not
+    renegotiate it."""
+
+    arrangement_id: str
+    conversation_id: str = ""
+    account_number: str
+    total: Decimal = Decimal("0")
+    installments: list[ArrangementInstallment] = Field(default_factory=list)
+    state: str = "active"  # active | completed | broken
+    created_date: str = ""  # ISO date
+
+
+class PaymentNotice(BaseModel):
+    """A failed automatic payment as a stored record — the
+    payments sibling of the roaming fair-use notice. The billing
+    run raises it when autopay declines; it carries the computed
+    figures (amount, method, reason) and the exact summary the
+    customer is shown when they next make contact, so the failure
+    is explained from the record, not reconstructed."""
+
+    notice_id: str
+    account_number: str
+    kind: str = "autopay_failed"
+    amount: Decimal = Decimal("0")
+    method_last4: str = ""
+    reason_code: str = ""
+    summary: str = ""  # the customer-facing text, composed from the figures
+    conversation_id: str = ""
+    created_date: str = ""  # ISO date
 
 
 class Finding(BaseModel):
