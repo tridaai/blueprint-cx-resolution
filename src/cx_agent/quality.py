@@ -302,6 +302,14 @@ def _run_scenario(module, scenario: dict) -> list[str]:
     return failures
 
 
+def _bare_actual(key: str, got: str) -> str:
+    """The runner renders a scalar actual as `key=value`; the
+    digest already names the assertion, so the repeated key
+    comes off. Anything else the runner produced is kept as-is."""
+    prefix = f"{key}="
+    return got[len(prefix):] if got.startswith(prefix) else got
+
+
 def _parse_failure(scenario_id: str, failure: str) -> dict:
     """One runner failure string → the digest's finding shape:
     where it failed, the assertion, what was expected, what the
@@ -315,13 +323,15 @@ def _parse_failure(scenario_id: str, failure: str) -> dict:
                 "where": f"turn {match.group('turn')}",
                 "assertion": match.group("key"),
                 "expected": match.group("want"),
-                "actual": match.group("got")}
+                "actual": _bare_actual(match.group("key"),
+                                       match.group("got"))}
     match = _FINAL_FAILURE.match(first_line)
     if match:
         return {"scenario_id": scenario_id, "where": "final",
                 "assertion": match.group("key"),
                 "expected": match.group("want"),
-                "actual": match.group("got")}
+                "actual": _bare_actual(match.group("key"),
+                                       match.group("got"))}
     return {"scenario_id": scenario_id, "where": "",
             "assertion": first_line, "expected": "", "actual": ""}
 
