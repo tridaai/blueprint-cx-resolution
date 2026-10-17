@@ -66,6 +66,7 @@ from .models import (
     PromptAct,
     PromptEntry,
     PromptPin,
+    RetentionCase,
     RoamingNotice,
     RoamingRate,
     SignalRecord,
@@ -188,6 +189,11 @@ class Store(Protocol):
     def get_dispute_case(self, case_id: str) -> DisputeCase | None: ...
     def list_dispute_cases(self, conversation_id: str | None = None,
                            account_number: str | None = None) -> list[DisputeCase]: ...
+    def save_retention_case(self, c: RetentionCase) -> None: ...
+    def get_retention_case(self, case_id: str) -> RetentionCase | None: ...
+    def list_retention_cases(self, conversation_id: str | None = None,
+                             account_number: str | None = None
+                             ) -> list[RetentionCase]: ...
     def save_escalation(self, e: Escalation) -> None: ...
     def list_escalations(self) -> list[Escalation]: ...
     def save_attribution(self, r: AttributionRecord) -> None: ...
@@ -245,6 +251,7 @@ class InMemoryStore:
         self.conversations: dict[str, Conversation] = {}
         self.actions: dict[str, ActionRecord] = {}
         self.dispute_cases: dict[str, DisputeCase] = {}
+        self.retention_cases: dict[str, RetentionCase] = {}
         self.escalations: dict[str, Escalation] = {}
         self.attributions: dict[str, AttributionRecord] = {}
         self.annotations: dict[str, AnnotationRecord] = {}
@@ -444,6 +451,20 @@ class InMemoryStore:
             rows = [r for r in rows if r.account_number == account_number]
         return sorted(rows, key=lambda r: r.case_id)
 
+    def save_retention_case(self, c):
+        self._put(self.retention_cases, c.case_id, c)
+
+    def get_retention_case(self, case_id):
+        return self._get(self.retention_cases, case_id)
+
+    def list_retention_cases(self, conversation_id=None, account_number=None):
+        rows = self._all(self.retention_cases)
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        if account_number:
+            rows = [r for r in rows if r.account_number == account_number]
+        return sorted(rows, key=lambda r: r.case_id)
+
     def save_escalation(self, e): self._put(self.escalations, e.escalation_id, e)
     def list_escalations(self): return self._all(self.escalations)
 
@@ -556,6 +577,7 @@ _TABLES = {
     "conversations": ("conversation_id", Conversation),
     "actions": ("action_id", ActionRecord),
     "dispute_cases": ("case_id", DisputeCase),
+    "retention_cases": ("case_id", RetentionCase),
     "escalations": ("escalation_id", Escalation),
     "attributions": ("conversation_id", AttributionRecord),
     "annotations": ("annotation_id", AnnotationRecord),
@@ -777,6 +799,20 @@ class _SqlStore:
 
     def list_dispute_cases(self, conversation_id=None, account_number=None):
         rows = self._load_all("dispute_cases")
+        if conversation_id:
+            rows = [r for r in rows if r.conversation_id == conversation_id]
+        if account_number:
+            rows = [r for r in rows if r.account_number == account_number]
+        return sorted(rows, key=lambda r: r.case_id)
+
+    def save_retention_case(self, c):
+        self._save("retention_cases", c.case_id, c)
+
+    def get_retention_case(self, case_id):
+        return self._load("retention_cases", case_id)
+
+    def list_retention_cases(self, conversation_id=None, account_number=None):
+        rows = self._load_all("retention_cases")
         if conversation_id:
             rows = [r for r in rows if r.conversation_id == conversation_id]
         if account_number:

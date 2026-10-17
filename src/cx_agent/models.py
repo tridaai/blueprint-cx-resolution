@@ -158,6 +158,13 @@ class Account(BaseModel):
     # date it takes effect. The live plan does not move until then.
     pending_plan_id: str | None = None
     pending_plan_effective: str = ""  # ISO date
+    # A cancellation scheduled for the cycle boundary (round 14):
+    # the ISO date it takes effect, set by the cancel_account
+    # action through the same next-cycle scheduling the pending
+    # plan machinery uses — the account stays active, and the
+    # customer keeps what they paid for, until that date. Empty
+    # until a cancellation is confirmed.
+    pending_cancellation_effective: str = ""  # ISO date
     open_case: str | None = None
     # Accessibility and contact preference, recorded at the care
     # desk from the customer's own words (care_book): the note is
@@ -348,6 +355,7 @@ class ActionKind(str, Enum):
     TAKE_PAYMENT = "take_payment"
     REFUND_PAYMENT = "refund_payment"
     SET_AUTOPAY = "set_autopay"
+    CANCEL_ACCOUNT = "cancel_account"
 
 
 # Actions that change money or the account itself. They need verified
@@ -361,6 +369,7 @@ CONSEQUENTIAL_ACTIONS = {
     ActionKind.TAKE_PAYMENT,
     ActionKind.REFUND_PAYMENT,
     ActionKind.SET_AUTOPAY,
+    ActionKind.CANCEL_ACCOUNT,
 }
 
 
@@ -425,6 +434,51 @@ class DisputeCase(BaseModel):
     credit_applied: Decimal = Decimal("0")
     decision_basis: str = ""
     goodwill_refused_reason: str = ""
+    created_date: str = ""  # ISO date
+    updated_date: str = ""
+
+
+class RetentionCase(BaseModel):
+    """A customer's stated intent to leave, as a record of its
+    own (round 14) — the retention sibling of the dispute case.
+
+    Opened the moment the intent is expressed and the account is
+    known. The `reason` is classified in code against the
+    governed list in retention_book; `reason_text` keeps the
+    customer's words verbatim. The case carries the ONE save
+    offer the policy allows (its mechanism, its summary, and the
+    action record that carries it — empty until one is made),
+    whether the customer asked for no offers at all, how many
+    times they have asked to cancel, and where a fault-blamed
+    exit was routed. It settles into exactly one outcome:
+    saved_accepted_offer (the offer executed), cancelled (the
+    cancellation executed, effective at the cycle boundary on
+    the account), or escalated_retention_team (policy puts the
+    case with humans — a fault-blamed exit, which escalates
+    through the billing desk's dispute path with `routed`
+    recording that)."""
+
+    case_id: str
+    conversation_id: str = ""
+    account_number: str = ""
+    reason: str = "other"  # the governed list lives in retention_book
+    reason_text: str = ""  # the customer's words, verbatim
+    state: str = "open"  # open | offer_proposed | saved
+    #                    | cancelled | escalated_retention_team
+    outcome: str = ""  # "" | saved_accepted_offer | cancelled
+    #                  | escalated_retention_team
+    routed: str = ""  # "" | billing_dispute_path (a fault-blamed exit)
+    no_offers_requested: bool = False
+    cancel_requests: int = 1
+    save_offer_kind: str = ""  # the underlying action kind, once made
+    save_offer_mechanism: str = ""  # plan_downgrade | goodwill_credit
+    #                               | loyalty_upgrade
+    save_offer_summary: str = ""
+    save_offer_action_id: str = ""
+    save_offer_outcome: str = ""  # "" | proposed | accepted
+    #                             | declined | blocked
+    cancellation_action_id: str = ""
+    cancellation_effective: str = ""  # ISO date, once executed
     created_date: str = ""  # ISO date
     updated_date: str = ""
 
