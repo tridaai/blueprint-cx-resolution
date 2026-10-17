@@ -6,6 +6,10 @@
     cx-agent complaints      list complaint records with SLA state
     cx-agent complaint-watch run the watch: raise breached complaints
     cx-agent intent-mining   the unhandled-intent mining report
+    cx-agent attribution-run attribute every closed conversation
+    cx-agent attribution     the attribution report (cause x desk,
+                             this window against the previous one)
+    cx-agent annotation-queue the human review queue + agreement
 """
 
 from __future__ import annotations
@@ -46,6 +50,45 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if cmd == "intent-mining":
         print(json.dumps(service.mining_report(), indent=2))
+        return 0
+    if cmd == "attribution-run":
+        print(json.dumps(service.run_attribution(), indent=2))
+        return 0
+    if cmd == "attribution":
+        days = int(argv[1]) if len(argv) > 1 else 7
+        report = service.attribution_report(days)
+        print(f"Attribution — last {report['window_days']} days "
+              f"({report['current_window'][0]} to {report['current_window'][1]}) "
+              f"vs previous ({report['previous_window'][0]} to "
+              f"{report['previous_window'][1]})")
+        print(f"  conversations attributed: {report['current']['total']} "
+              f"(previous {report['previous']['total']})")
+        for row in report["cause_desk_rows"]:
+            print(f"  {row['cause']:<20} {row['desk']:<10} "
+                  f"now {row['current']}  was {row['previous']}  "
+                  f"({row['delta']:+d})")
+        print(f"  escalated by design: {report['current']['by_design']} "
+              f"(previous {report['previous']['by_design']})   "
+              f"no cause fired: {report['current']['no_cause']} "
+              f"(previous {report['previous']['no_cause']})")
+        for join in report["mining_evidence"]:
+            print(f"  mining: {join['label']} ×{join['count']} — "
+                  f"missing_capability {join['missing_capability']}, "
+                  f"routing_error {join['routing_error']}, "
+                  f"other {join['other_cause']}, "
+                  f"unattributed {join['unattributed']}")
+        return 0
+    if cmd == "annotation-queue":
+        for row in service.annotation_queue():
+            print(f"{row['conversation_id']}  {row['outcome']:<19} "
+                  f"cause={row['cause'] or '—':<19} desk={row['desk']:<10} "
+                  f"state={row['state']:<10} annotations={row['annotations']}")
+        agreement = service.annotation_agreement()
+        print(f"agreement: {agreement['agreements']}/{agreement['pairs']} "
+              f"pairs, rate={agreement['agreement_rate']}, "
+              f"kappa={agreement['kappa']}, "
+              f"disputed={len(agreement['disagreements'])}, "
+              f"settled={len(agreement['settled'])}")
         return 0
     print(f"unknown command: {cmd}", file=sys.stderr)
     return 2

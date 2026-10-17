@@ -41,6 +41,10 @@
   .dsp .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
   .dsp ul { margin:4px 0 8px 16px; padding:0; }
   .empty { color:var(--mut); font-size:14px; }
+  .form label { display:block; font-size:13px; color:var(--mut); margin:8px 0; }
+  .form input, .form select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; margin-top:3px; background:#fff; }
+  table.attr { border-collapse:collapse; font-size:13px; width:100%; }
+  table.attr td, table.attr th { border-bottom:1px solid var(--line); padding:4px 6px; text-align:left; }
   footer { display:flex; align-items:center; gap:16px; padding:14px 28px; border-top:1px solid var(--line); font-size:14px; }
   footer img { width:24px; height:24px; }
   footer a { color:var(--indigo); text-decoration:none; font-weight:600; }
@@ -96,6 +100,38 @@
     <div id="feedback"><p class="empty">No feedback recorded. Compliments and general feedback are kept verbatim — the business mines them.</p></div>
     <h2 style="margin-top:22px">Unhandled-intent candidates</h2>
     <div id="mining"><p class="empty">No candidates yet. The mining pass clusters the conversations that ended unhandled; a cluster at three or more is a candidate intent for a human to design.</p></div>
+    <h2 style="margin-top:22px">Failure attribution</h2>
+    <div id="attribution"><p class="empty">No attributions yet. Run the pass over closed conversations; each record names the outcome, the one primary cause, and the rule that fired.</p></div>
+    <button class="ghost" onclick="runAttribution()">Run attribution pass</button>
+    <div id="attribution-note" class="empty" style="margin-top:6px"></div>
+    <h2 style="margin-top:22px">Annotation queue</h2>
+    <div id="annotation-agreement"><p class="empty">No annotation pairs yet.</p></div>
+    <div id="annotation-queue"><p class="empty">Nothing queued. Escalated and unresolved conversations queue in full once attributed; resolved ones join by sample.</p></div>
+    <div class="dsp form">
+      <h3>Annotate</h3>
+      <label>Conversation id <input id="ann-conv" placeholder="CONV-…"></label>
+      <label>Annotator <input id="ann-name" placeholder="your name"></label>
+      <label>Attributed cause is
+        <select id="ann-correct">
+          <option value="yes">right</option>
+          <option value="no">wrong — corrected cause:</option>
+        </select></label>
+      <label>Corrected cause
+        <select id="ann-cause">
+          <option value="">—</option>
+          <option value="routing_error">routing_error</option>
+          <option value="identity_friction">identity_friction</option>
+          <option value="policy_limit">policy_limit</option>
+          <option value="missing_capability">missing_capability</option>
+          <option value="procedure_dead_end">procedure_dead_end</option>
+          <option value="customer_left">customer_left</option>
+          <option value="system_error">system_error</option>
+        </select></label>
+      <label>Note <input id="ann-note-text" placeholder="why (optional)"></label>
+      <label><input type="checkbox" id="ann-verdict" style="width:auto"> This is the verdict (settles a disagreement)</label>
+      <button onclick="annotateSubmit()">Save annotation</button>
+      <div id="ann-note" class="empty" style="margin-top:6px"></div>
+    </div>
   </section>
 </main>
 <footer>
@@ -123,6 +159,45 @@ async function runWatch() {
   document.getElementById("watch-note").textContent =
     "Watch run " + result.on + ": " + result.raised.length + " breach(es) raised to the queue" +
     (result.due_soon.length ? " · " + result.due_soon.length + " due soon" : "") + ".";
+  await refresh();
+}
+
+async function runAttribution() {
+  const result = await api("/attribution/run", {method: "POST"});
+  document.getElementById("attribution-note").textContent =
+    "Pass attributed " + result.attributed.length + " conversation(s) · " +
+    result.already_attributed + " already on record · " +
+    result.still_open + " still open.";
+  await refresh();
+}
+
+function annotatePick(id) {
+  document.getElementById("ann-conv").value = id;
+  document.getElementById("ann-conv").focus();
+}
+
+async function annotateSubmit() {
+  const note = document.getElementById("ann-note");
+  const correct = document.getElementById("ann-correct").value === "yes";
+  const body = {
+    conversation_id: document.getElementById("ann-conv").value.trim(),
+    annotator: document.getElementById("ann-name").value.trim(),
+    cause_correct: correct,
+    corrected_cause: correct ? null : (document.getElementById("ann-cause").value || null),
+    note: document.getElementById("ann-note-text").value.trim(),
+    is_verdict: document.getElementById("ann-verdict").checked
+  };
+  const resp = await fetch("/annotations", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    note.textContent = "Refused: " + (data.detail || resp.status);
+    return;
+  }
+  note.textContent = "Saved " + data.annotation_id + " — " + data.annotator +
+    (data.is_verdict ? " (verdict)" : "") + ".";
   await refresh();
 }
 
@@ -388,6 +463,58 @@ async function refresh() {
         '<div class="k">Samples, verbatim</div><ul>' +
         c.samples.map(s => "<li>" + s + "</li>").join("") + "</ul>";
       mnbox.appendChild(div);
+    }
+  }
+  const rep = await api("/attribution/report");
+  const rbox = document.getElementById("attribution");
+  if (!rep.current.total && !rep.previous.total) {
+    rbox.innerHTML = '<p class="empty">No attributions yet. Run the pass over closed conversations; each record names the outcome, the one primary cause, and the rule that fired.</p>';
+  } else {
+    let html = '<p class="empty">Window: last ' + rep.window_days + ' days — ' +
+      rep.current.total + ' attributed (previous window ' + rep.previous.total + '). ' +
+      'Escalated by design: ' + rep.current.by_design +
+      ' · no cause fired: ' + rep.current.no_cause + '.</p>';
+    if (rep.cause_desk_rows.length) {
+      html += '<table class="attr"><tr><th>Cause</th><th>Desk</th><th>Now</th><th>Was</th><th>Δ</th></tr>' +
+        rep.cause_desk_rows.map(r => "<tr><td>" + r.cause + "</td><td>" + r.desk +
+          "</td><td>" + r.current + "</td><td>" + r.previous + "</td><td>" +
+          (r.delta > 0 ? "+" : "") + r.delta + "</td></tr>").join("") + "</table>";
+    }
+    for (const j of rep.mining_evidence) {
+      html += '<p class="empty">Mining join — “' + j.label + '” ×' + j.count +
+        ': missing_capability ' + j.missing_capability +
+        ' · routing_error ' + j.routing_error +
+        ' · other cause ' + j.other_cause +
+        ' · unattributed ' + j.unattributed + '.</p>';
+    }
+    rbox.innerHTML = html;
+  }
+  const agr = await api("/annotations/agreement");
+  const agbox = document.getElementById("annotation-agreement");
+  agbox.innerHTML = '<p class="empty">Annotator agreement: ' +
+    (agr.pairs ? agr.agreements + "/" + agr.pairs + " pairs agree · rate " +
+      agr.agreement_rate + " · Cohen's kappa " + agr.kappa : "no pairs yet") +
+    " · " + agr.disagreements.length + " disputed · " + agr.settled.length + " settled.</p>";
+  const que = await api("/annotations/queue");
+  const qbox = document.getElementById("annotation-queue");
+  if (!que.queue.length) {
+    qbox.innerHTML = '<p class="empty">Nothing queued. Escalated and unresolved conversations queue in full once attributed; resolved ones join by sample.</p>';
+  } else {
+    qbox.innerHTML = "";
+    for (const q of que.queue) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const state = q.state === "settled" ? '<span class="chip green">settled</span>'
+        : q.state === "disputed" ? '<span class="chip red">disputed</span>'
+        : q.state === "annotated" ? '<span class="chip">annotated</span>'
+        : '<span class="chip red">awaiting review</span>';
+      div.innerHTML = "<h3>" + q.conversation_id + "</h3>" + state +
+        (q.sampled ? ' <span class="chip">sampled</span>' : "") +
+        '<div class="k">Outcome · cause · rule · desk</div><div>' + q.outcome +
+        " · " + (q.cause || "—") + " · " + q.rule + " · " + q.desk + "</div>" +
+        '<div class="k">Annotations</div><div>' + q.annotations + "</div>" +
+        '<button class="ghost" onclick="annotatePick(\'' + q.conversation_id + '\')">Annotate</button>';
+      qbox.appendChild(div);
     }
   }
 }

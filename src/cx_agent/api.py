@@ -51,6 +51,15 @@ class MessageIn(BaseModel):
     text: str
 
 
+class AnnotationIn(BaseModel):
+    conversation_id: str
+    annotator: str
+    cause_correct: bool
+    corrected_cause: str | None = None
+    note: str = ""
+    is_verdict: bool = False
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
@@ -246,6 +255,89 @@ def mining_report() -> dict:
     """The unhandled-intent mining report: candidate clusters
     for humans designing new intents. Creates nothing."""
     return service.mining_report()
+
+
+@app.post("/attribution/run", dependencies=[Depends(require_key)])
+def run_attribution() -> dict:
+    """Run the attribution pass: every closed conversation gets
+    its outcome + cause record, computed from its audit trail."""
+    return service.run_attribution()
+
+
+@app.get("/attribution/report", dependencies=[Depends(require_key)])
+def attribution_report(days: int = 7) -> dict:
+    """Attribution counts by cause × desk over a window, the
+    previous window beside them, and the mining join."""
+    if days < 1:
+        raise HTTPException(status_code=400, detail="days must be >= 1")
+    return service.attribution_report(days)
+
+
+@app.get("/attribution", dependencies=[Depends(require_key)])
+def list_attributions() -> dict:
+    return {"attributions": [r.model_dump(mode="json")
+                             for r in service.list_attributions()]}
+
+
+@app.get("/attribution/{conversation_id}", dependencies=[Depends(require_key)])
+def get_attribution(conversation_id: str) -> dict:
+    record = service.store.get_attribution(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404,
+                            detail="no attribution for this conversation")
+    return record.model_dump(mode="json")
+
+
+@app.post("/attribution/{conversation_id}", dependencies=[Depends(require_key)])
+def attribute_conversation(conversation_id: str) -> dict:
+    """Attribute one conversation — including one that merely
+    stopped, which this act declares ended."""
+    if service.get_conversation(conversation_id) is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return service.attribute_conversation(
+        conversation_id).model_dump(mode="json")
+
+
+@app.get("/annotations/queue", dependencies=[Depends(require_key)])
+def annotation_queue() -> dict:
+    """The review queue: every escalated or unresolved
+    conversation, a deterministic sample of the resolved ones,
+    each with its review state."""
+    return {"queue": service.annotation_queue()}
+
+
+@app.get("/annotations/agreement", dependencies=[Depends(require_key)])
+def annotation_agreement() -> dict:
+    """Annotator agreement — simple rate and Cohen's kappa over
+    cause labels — plus the disagreements awaiting a verdict."""
+    return service.annotation_agreement()
+
+
+@app.get("/annotations", dependencies=[Depends(require_key)])
+def list_annotations(conversation_id: str | None = None) -> dict:
+    return {"annotations": [a.model_dump(mode="json") for a in
+                            service.list_annotations(conversation_id)]}
+
+
+@app.post("/annotations", dependencies=[Depends(require_key)])
+def annotate(body: AnnotationIn) -> dict:
+    """Write one annotation. The queue's rules are enforced in
+    code; a broken rule is a 400 naming it, a conversation that
+    doesn't exist or isn't attributed yet is a 404."""
+    if service.get_conversation(body.conversation_id) is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    if service.store.get_attribution(body.conversation_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no attribution for this conversation — attribute "
+                   "it before annotating it")
+    try:
+        record = service.annotate(
+            body.conversation_id, body.annotator, body.cause_correct,
+            body.corrected_cause, body.note, body.is_verdict)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return record.model_dump(mode="json")
 
 
 @app.get("/")
