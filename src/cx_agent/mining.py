@@ -116,6 +116,11 @@ def mine_unhandled_intents(store, policy) -> dict:
             "sources": {s: sources.get(s, 0) for s in SOURCES
                         if sources.get(s)},
             "samples": texts[:3],
+            # The member conversations ride the row so other
+            # reports (failure attribution) can join their own
+            # records against the cluster — evidence, quoted and
+            # traceable, never a summary of a summary.
+            "conversation_ids": [m[2] for m in cluster["members"]],
         })
     report_clusters.sort(key=lambda c: (-c["count"], c["label"]))
     candidates = [c for c in report_clusters if c["candidate"]]

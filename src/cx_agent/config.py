@@ -106,6 +106,12 @@ class Policy:
     # ~0.39+, unrelated unhandled asks ~0.22 or less).
     mining_min_cluster: int = 3
     mining_similarity: float = 0.30
+    # Annotation queue sampling: every escalated or unresolved
+    # conversation is queued for human review; resolved ones are
+    # sampled deterministically — one in this many, by a stable
+    # hash of the conversation id — so the queue also audits the
+    # successes without drowning the reviewers. 1 queues them all.
+    annotation_sample_modulus: int = 5
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -157,6 +163,8 @@ class Policy:
                 "CX_MINING_MIN_CLUSTER", base.mining_min_cluster),
             mining_similarity=flt(
                 "CX_MINING_SIMILARITY", base.mining_similarity),
+            annotation_sample_modulus=num(
+                "CX_ANNOTATION_SAMPLE_MODULUS", base.annotation_sample_modulus),
         )
 
 
