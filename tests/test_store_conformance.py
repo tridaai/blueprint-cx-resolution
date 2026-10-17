@@ -266,3 +266,46 @@ def test_roaming_rates_and_notices(kind, tmp_path):
     assert rows[0].unwarned_crossing is True
     assert store.list_roaming_notices("NB-OTHER") == []
     assert len(store.list_roaming_notices()) == 1
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_care_records(kind, tmp_path):
+    """Round 8 records — complaints (with the watch's queue entry
+    riding the record) and feedback — behave identically on every
+    store, and the account carries its accessibility record."""
+    from cx_agent.models import ComplaintRecord, FeedbackRecord
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+    complaint = ComplaintRecord(
+        complaint_id="CMP-T1", conversation_id="CONV-T",
+        account_number="NB-1001", category="appointment",
+        text="your engineer never showed up", status="open",
+        created_date="2026-10-01", response_due="2026-10-06",
+        sla_escalation_id="ESC-T1")
+    store.save_complaint(complaint)
+    assert store.get_complaint("CMP-T1") == complaint
+    assert store.list_complaints(conversation_id="CONV-T") == [complaint]
+    assert store.list_complaints(account_number="NB-1002") == []
+    store.save_complaint(store.get_complaint("CMP-T1"))
+    assert len(store.list_complaints()) == 1
+
+    feedback = FeedbackRecord(
+        record_id="FBK-T1", conversation_id="CONV-T",
+        account_number="NB-1001", kind="compliment",
+        text="the engineer was brilliant", created_date="2026-10-01")
+    store.save_feedback(feedback)
+    assert store.list_feedback(conversation_id="CONV-T") == [feedback]
+    assert store.list_feedback(account_number="NB-1002") == []
+
+    account = store.get_account("NB-1001")
+    account.accessibility_note = "send my letters in large print"
+    account.preferred_contact = "large print"
+    store.save_account(account)
+    read_account = store.get_account("NB-1001")
+    assert read_account.accessibility_note == \
+        "send my letters in large print"
+    assert read_account.preferred_contact == "large print"

@@ -12,7 +12,6 @@ import logging
 import uuid
 
 from . import care_book, mining
-from .clock import today
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import make_llm
@@ -142,8 +141,7 @@ class ConversationService:
                 queue="general",
                 reason="complaint_sla_breach",
                 turn=conv.turns if conv else 0,
-                packet=packet,
-                created_date=today().isoformat())
+                packet=packet)
             self.store.save_escalation(esc)
             record.sla_escalation_id = esc.escalation_id
             self.store.save_complaint(record)

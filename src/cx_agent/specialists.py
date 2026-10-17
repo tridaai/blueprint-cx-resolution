@@ -1527,7 +1527,8 @@ def care(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     pending_note = care_state.get("pending_accessibility")
     if pending_note:
         account = care_book.record_accessibility(
-            ctx.store, conv, pending_note)
+            ctx.store, conv, pending_note,
+            account_number=care_book.account_number_in(text))
         if account is not None:
             care_state.pop("pending_accessibility", None)
             return _recorded_need_result(account)

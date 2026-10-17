@@ -84,7 +84,7 @@ _VULNERABLE_STATEMENTS: dict[str, list[str]] = {
         r"\bi('m| am) homeless\b",
         r"\bwe('ve| have) lost our home\b",
         r"\bi('m| am) in (serious )?debt\b",
-        r"\bi('m| am) facing financial hardship\b",
+        r"\b(i|we)('m| am|'re| are) facing financial hardship\b",
     ],
 }
 
