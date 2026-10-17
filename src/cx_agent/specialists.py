@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from . import roaming_book
 from .billing_book import (
     assess_dispute,
     bill_shock,
@@ -79,10 +80,12 @@ _IDENTITY_ASK = (
 # ---------------------------------------------------------------------------
 
 
-def _evidenced_total(bill) -> tuple[Decimal, list[str]]:
-    """Charges the bill itself proves wrong, as (total, evidence in
-    words) — the quick scan the explanation and the goodwill gate
-    use. The per-line decisions live in billing_book.assess_dispute."""
+def _evidenced_total(bill, verdicts=None) -> tuple[Decimal, list[str]]:
+    """Charges proven wrong, as (total, evidence in words) — the
+    quick scan the explanation and the goodwill gate use. The
+    evidence is the bill's own markers plus, for roaming lines,
+    the record verdicts roaming_book computed. The per-line
+    decisions live in billing_book.assess_dispute."""
     total = Decimal("0")
     items: list[str] = []
     if bill is None:
@@ -92,6 +95,10 @@ def _evidenced_total(bill) -> tuple[Decimal, list[str]]:
         if amount > 0:
             total += amount
             items.append(evidence)
+    for verdict in (verdicts or {}).values():
+        if verdict.creditable > 0:
+            total += verdict.creditable
+            items.append(verdict.evidence)
     return total, items
 
 
@@ -276,13 +283,20 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     unhappy = any(w in lowered for w in ("expensive", "too much", "goodwill",
                                          "unhappy", "loyal", "ridiculous",
                                          "fed up"))
-    evidence_total, evidence_items = _evidenced_total(bill)
+    # Roaming lines are decided from the account's records (pass
+    # windows, warnings given, unwarned ceiling crossings) as
+    # well as the bill's own markers — one evidence read for the
+    # whole desk, computed before anything is decided.
+    account = _account(ctx, conv)
+    verdicts = roaming_book.roaming_dispute_verdicts(
+        ctx.store, account, bill, ctx.policy, conv.conversation_id) if bill else {}
+    evidence_total, evidence_items = _evidenced_total(bill, verdicts)
 
     # A dispute with identified lines becomes a case, decided line
     # by line: evidenced lines credit, named-but-clean lines
     # decline with reasons, an over-cap total escalates.
     if dispute and bill is not None:
-        assessment = assess_dispute(bill, text, ctx.policy)
+        assessment = assess_dispute(bill, text, ctx.policy, verdicts)
         if assessment.lines:
             return _dispute_result(conv, ctx, bill, assessment, unhappy)
 

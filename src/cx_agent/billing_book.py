@@ -219,6 +219,19 @@ def decline_reason(charge: BillCharge) -> str:
 
 
 @dataclass
+class RoamingVerdict:
+    """One roaming line decided from the account's records rather
+    than the bill's own markers (roaming_book computes these): a
+    creditable amount with its evidence, or zero with the evidence
+    and the plain-words reason the charge stands."""
+
+    charge_id: str
+    creditable: Decimal = ZERO
+    evidence: str = ""
+    decline_reason: str = ""
+
+
+@dataclass
 class Assessment:
     lines: list[DisputeLine] = field(default_factory=list)
     credit_total: Decimal = ZERO  # sum of credited lines
@@ -234,14 +247,23 @@ class Assessment:
         return [l for l in self.lines if l.decision == "declined"]
 
 
-def assess_dispute(bill: Bill, text: str, policy: Policy) -> Assessment:
+def assess_dispute(bill: Bill, text: str, policy: Policy,
+                   roaming_verdicts: dict | None = None) -> Assessment:
     """Decide every disputed line on its own evidence.
 
     The disputed set is every line the bill itself proves wrong,
     plus every clean line the customer names. The original of a
     duplicate pair is not a separate dispute — the pair is one
     wrong charge — so it is never declined alongside its duplicate.
+
+    Roaming lines may also arrive decided from the account's
+    records (`roaming_verdicts`, computed by roaming_book): a
+    creditable verdict joins the evidenced set on equal footing
+    with the bill's own markers; a stands verdict declines the
+    line with its recorded reason when the customer disputes the
+    roaming charge, whether they named the line or the topic.
     """
+    verdicts = roaming_verdicts or {}
     evidenced: dict[str, tuple[Decimal, str]] = {}
     pair_originals: set[str] = set()
     for charge in bill.charges:
@@ -250,10 +272,14 @@ def assess_dispute(bill: Bill, text: str, policy: Policy) -> Assessment:
             evidenced[charge.charge_id] = (amount, evidence)
             if charge.duplicate_of:
                 pair_originals.add(charge.duplicate_of)
+    for charge_id, verdict in verdicts.items():
+        if verdict.creditable > 0 and charge_id not in evidenced:
+            evidenced[charge_id] = (verdict.creditable, verdict.evidence)
     evidenced_total = sum((a for a, _e in evidenced.values()), ZERO)
     escalated = evidenced_total > policy.dispute_credit_cap
 
     named_ids = {c.charge_id for c in _named_charges(bill, text)}
+    roaming_named = "roaming" in _tokens(text) or "roam" in _tokens(text)
     lines: list[DisputeLine] = []
     for charge in bill.charges:
         if charge.charge_id in evidenced:
@@ -263,6 +289,14 @@ def assess_dispute(bill: Bill, text: str, policy: Policy) -> Assessment:
                 amount=charge.amount, disputed_amount=amount,
                 evidence=evidence,
                 decision="escalated" if escalated else "credited"))
+        elif charge.charge_id in verdicts \
+                and (charge.charge_id in named_ids or roaming_named):
+            verdict = verdicts[charge.charge_id]
+            lines.append(DisputeLine(
+                charge_id=charge.charge_id, description=charge.description,
+                amount=charge.amount, disputed_amount=charge.amount,
+                evidence=verdict.evidence,
+                decision="declined", reason=verdict.decline_reason))
         elif charge.charge_id in named_ids and charge.charge_id not in pair_originals:
             lines.append(DisputeLine(
                 charge_id=charge.charge_id, description=charge.description,
