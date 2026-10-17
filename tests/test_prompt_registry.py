@@ -32,10 +32,10 @@ def _say(service, cid, text):
 def test_seed_writes_the_whole_registry(seeded_store):
     registry = PromptRegistry(seeded_store)
     ids = registry.known_ids()
-    assert len(ids) == 27  # 2 compose + 2 intent + 7 forms + 16 policies
+    assert len(ids) == 28  # 2 compose + 2 intent + 7 forms + 17 policies
     assert {"compose.system", "compose.user", "intent.system",
             "intent.user"} <= set(ids)
-    assert sum(1 for i in ids if i.startswith("policy.")) == 16
+    assert sum(1 for i in ids if i.startswith("policy.")) == 17
     assert sum(1 for i in ids if i.startswith("explain.")) == 7
     for pid in ids:
         assert registry.active_version(pid) == 1
@@ -47,7 +47,7 @@ def test_seed_never_overwrites_an_operators_version(service):
     service.add_prompt_version(
         "intent.system", "Sort the message into exactly one label.")
     counts = service.seed()  # a re-seed
-    assert counts["prompts"] == 27
+    assert counts["prompts"] == 28
     assert service.prompts.active_version("intent.system") == 2
     assert service.prompts.active_text("intent.system") == \
         "Sort the message into exactly one label."
@@ -288,7 +288,7 @@ def test_registry_round_trip_on_every_store(kind, tmp_path):
         reopened = SqliteStore(tmp_path / "cx.db")
         assert PromptRegistry(reopened).active_version(
             "intent.system") == 1
-        assert len(reopened.list_prompt_entries()) == 28
+        assert len(reopened.list_prompt_entries()) == 29
 
 
 def _policy():
@@ -308,7 +308,7 @@ def test_prompts_on_the_api():
     client = TestClient(app)
     client.post("/seed")
     rows = client.get("/prompts").json()["prompts"]
-    assert len(rows) == 27
+    assert len(rows) == 28
     detail = client.get("/prompts/compose.system").json()
     assert detail["prompt_id"] == "compose.system"
     assert detail["versions"][0]["text"] == COMPOSE_SYSTEM

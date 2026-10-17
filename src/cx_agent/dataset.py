@@ -363,6 +363,7 @@ def build_policies() -> list[PolicyDocument]:
         ("POL-ROAM-03", "Roaming projections and warnings", "roaming"),
         ("POL-PLAN-01", "Changing your plan", "plans"),
         ("POL-PLAN-02", "When a plan change starts, and undoing one", "plans"),
+        ("POL-RET-01", "Cancelling, and the one save offer", "plans"),
         ("POL-ID-01", "Verifying your identity", "identity"),
         ("POL-PAY-01", "Payment arrangements", "payments"),
         ("POL-PAY-02", "Payment methods", "payments"),

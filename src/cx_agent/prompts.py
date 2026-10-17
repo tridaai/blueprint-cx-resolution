@@ -154,6 +154,17 @@ POLICY_TEXTS: dict[str, str] = {'POL-BILL-01': 'When a charge on a bill is wrong
                 'fault is handled by the billing team under the dispute policy, not by the '
                 'plan-change desk. A plan change can be reversed on the day it was made; after '
                 "that day, reversing it is the offers team's decision.",
+ 'POL-RET-01': 'When a customer says they want to cancel, the reason is recorded in their own '
+                'words against a governed list and a retention case is opened. The agent may make '
+                'one save offer, and only one, built from the mechanisms already on the account: a '
+                'downgrade priced under the plan-change policy, a goodwill credit under the '
+                'goodwill policy, or the loyalty upgrade price where the customer is eligible for '
+                'it. If the customer says they want no offers, none is made. If they decline the '
+                'offer, or ask to cancel again, the cancellation goes ahead without a second '
+                'offer. A cancellation takes effect at the end of the current billing cycle, so '
+                'the customer keeps the service they have paid for until then. A customer who '
+                'wants to leave because of a fault is handled by the billing team under the '
+                'dispute policy, and the retention case records that routing.',
  'POL-ROAM-01': 'Outside a pass, roaming data is charged per GB at the destination rate. The Roam '
                 'Pass costs $30 for 10 days and includes unlimited calls and texts plus 1 GB of '
                 'data per day in more than 40 countries. A pass can be activated at any point in a '
