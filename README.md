@@ -156,6 +156,19 @@ open http://localhost:8000              # the operator console
   step — and exhausting the steps books a technician callback
   as a record carrying the whole step transcript, instead of
   improvising.
+- **Known-issue awareness** — operations keeps an incident
+  feed: governed records carrying the affected service, the
+  postcodes covered, the declared symptom signals, the status,
+  and a customer-safe summary in the operator's own words.
+  Matching is deterministic code, not model judgement: when a
+  customer's report is explained by a live incident (active or
+  monitoring — never a resolved one), the agent acknowledges
+  the known issue up front in the record's words, starts no
+  troubleshooting procedure for that symptom, proposes nothing
+  unrelated, and offers the book's callback follow-up instead.
+  The match is audited with its signals, rides the handoff
+  packet when the conversation escalates, and stops the moment
+  the incident is resolved — even mid-conversation.
 - **Account & payments** — card replacement behind full
   identity verification, and payments worked as records: every
   charge attempt lands on a log with the processor's reason
@@ -413,7 +426,7 @@ code, never instructions to a model.
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **141 scripted multi-turn conversations** played
+behavioral: **147 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
 identity, care, attribution, signals, retention. Ninety-five are hand-written persona trajectories
@@ -432,7 +445,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1272/1272 assertions, 978/978 zero-tolerance. The
+the tree: 1341/1341 assertions, 1019/1019 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -442,7 +455,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (307 tests) covers the deterministic core —
+The pytest suite (328 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, the retention flow (the case record, the one
@@ -492,6 +505,11 @@ src/cx_agent/
                    trail in code, the windowed cause × desk
                    report with the mining join, and the human
                    review loop (annotations, agreement, verdicts)
+  incidents.py     known-issue awareness: the operator incident
+                   feed, the deterministic matching (live status,
+                   declared signals, service, postcode scope),
+                   the record-verbatim acknowledgement, the
+                   recorded operator acts (add / update / resolve)
   signals.py       conversation signals: the frustration lexicon
                    and its rising rule, the counted effort score,
                    confusion detection, the per-turn snapshot, the
@@ -522,7 +540,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (95 trajectories) + personas.py
+evals/             scenarios.jsonl (101 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite
@@ -541,9 +559,14 @@ into the records themselves.
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
 - Specialists are still on their happy paths in places.
-  The later deepening — known-issue awareness, continuity
-  across conversations, handoff scoring — is still to come
-  (see the round map in `docs/architecture.md`).
+  The later deepening — continuity across conversations,
+  handoff scoring — is still to come (see the round map in
+  `docs/architecture.md`). Incident matching is deterministic
+  and bounded by the incidents' declared signals: a report
+  worded outside them follows the normal troubleshooting
+  path, and the agent has no incident intelligence beyond the
+  feed — no inferred causes, no estimated fix times, only
+  what the operator's record states.
 - The offline fallback drafts competently from findings because
   the findings are written as sentences; it does not understand
   free-form customer language the way a model does. Routing and

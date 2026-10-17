@@ -597,12 +597,12 @@ profiles. A model embedder can replace it behind `embed`/`cosine`.
 
 ## Evals as behavior rubrics
 
-The eval pack grades trajectories, not replies: 141 scripted
+The eval pack grades trajectories, not replies: 147 scripted
 multi-turn conversations, each attributed to a persona and a
 rubric, with assertions on the observable behavior per turn and on
 final store state (balance after a credit, plan after a change,
 the escalation queue, the reroute audit count, action-record
-statuses). Ninety-five are hand-written; the rest are generated
+statuses). A hundred and one are hand-written; the rest are generated
 and attacked (round 9, below). The report breaks the results
 down by rubric, by persona, and by adversarial class, so a
 regression localises to a customer style or an attack type. The trajectories include the round-2 desk discipline:
@@ -986,19 +986,122 @@ deterministic template text the code composes itself — the
 confirmation ask, the signal offer lines, the escalation
 reply, the specialists' computed findings sentences, the
 procedure step instructions (versioned with the procedures
-since round 4), the bill's summary-first form. None of it is
+since round 4), the bill's summary-first form, the incident
+acknowledgement (round 15, below — its words are the operator's
+record, not the model's). None of it is
 an instruction to a model; it is code, reviewed as code.
+
+## Known-issue awareness
+
+An agent that trots a customer through device steps for a
+fault the operator already knows about is not being thorough;
+it is wasting the customer's effort and teaching them the
+support line does not talk to the network team. Round 15 gives
+the book an incident feed and teaches the supervisor to read
+it before it troubleshoots.
+
+**The feed is data.** An `Incident` is a governed record (one
+row per incident, `incidents` + `incident_acts`, migration
+0013 in both dialects): an id, a title, the **service** it
+affects — the troubleshooting procedures' own symptom
+vocabulary (`no_signal`, `slow_data`, `wifi_calling`,
+`broadband_drops`) — the **postcodes** it covers (empty means
+every area), the **symptom signals** that identify it, a
+**status** (`active` / `monitoring` / `resolved`), the start
+date, and a **customer-safe summary in the operator's own
+words**. The dataset seeds the standing book; afterwards the
+feed is operable through recorded acts (`incidents.py`,
+mirroring the prompt registry's act discipline): add, update
+and resolve, each validated against the governed vocabularies
+— an incident with no signals or no summary is refused,
+because matching is bounded by the declared signals and the
+summary is the only account of the issue the agent may give —
+and each written to the append-only act log with its actor.
+Re-seeding never overwrites an operator's record, so a
+resolution survives a seed the way a registry version does.
+
+**Matching is code, and deliberately narrow.** Before the
+technical desk works a fault, `match_for_turn` reads the feed
+deterministically — no model is consulted. An incident
+explains a report only when all of these hold: it is **live**
+(`active` or `monitoring`; a resolved incident never matches,
+so resolving one stops every later acknowledgement, including
+mid-conversation); the customer's words carry at least one of
+its **declared signals**; the **service agrees** — when the
+report names a procedure's symptom, that symptom must be the
+incident's service, so a broadband incident never acknowledges
+a signal fault however the words overlap; and the **area
+agrees** — a postcode-scoped incident matches only a customer
+whose account postcode it covers. With no account known yet a
+scoped incident cannot match: the acknowledgement waits for
+the identity the troubleshooting desk asks for anyway, and
+the resumed request is matched again with the postcode on
+record. A second read covers the walk already running: if a
+procedure is live for the incident's very fault and one of its
+signals appeared in the customer's own earlier words, the
+incident matches the walk — an incident opened mid-walk, by an
+operator act between turns, is picked up on the next turn.
+
+**On a match, the conversation changes in exactly one way.**
+The desk never runs: no procedure is started for the matched
+symptom, a live walk for that same fault is abandoned with
+`matched_known_incident` as its outcome (its history stays on
+the record), and no unrelated action is proposed. The reply
+acknowledges the known issue up front **from the record
+itself** — the incident's id, title, status and start date as
+one verbatim line, plus the operator's summary carried as a
+guaranteed line the composer cannot paraphrase away — and
+offers the book's existing follow-up in place of the walk: a
+technician **callback as a `CallbackRecord`** (its reason
+names the incident), proposed through the normal confirmation
+protocol and settled when the customer answers it. Nothing is
+invented: no cause beyond the summary, no fix time, no ETA —
+the record is the whole of what the agent knows about the
+issue, and it says so by construction.
+
+**Records and surfaces.** The match is written twice: an audit
+event on the conversation (kind `incident`, carrying the
+incident id and the matched signals) and the conversation's
+own match list, which the surfaces read — `GET /incidents`
+(with a status filter) and `GET /incidents/{id}` with its act
+log, `POST /incidents` and the `/update` and `/resolve` acts,
+`GET /conversations/{id}/incidents` for one conversation's
+matches with each incident's live status, the `cx-agent
+incidents` / `incident-add` / `incident-update` /
+`incident-resolve` commands, and the console's incident panel.
+A matched conversation that escalates carries the issue in its
+handoff packet: `known_incidents` holds the matched incidents
+**still live at handoff time**, as the records state them,
+with an open item naming each — a match whose incident
+resolved before the handoff is history and does not ride the
+packet as an open issue. The coverage tool on the no-signal
+walk reads the same feed as its live outage register: a live
+no-signal incident covering the customer's postcode reports
+the outage there too.
+
+**Honest limits.** Matching is deterministic and bounded by
+the declared signals — that is the design, stated plainly: a
+report worded outside an incident's signals follows the
+normal troubleshooting path, an incident whose scope is drawn
+wrong (a postcode missed, a signal unlisted) does not match,
+and the agent has no incident intelligence beyond the feed —
+no correlation, no inference from complaint volume, no
+guessed causes or fix times. What it gains is narrower and
+worth more: when the operator knows, the customer is told —
+in the operator's words — and their effort stops being spent
+re-proving a known fault.
 
 ## Round map
 
-This document describes rounds 1–14 (core; rerouting and
+This document describes rounds 1–15 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
-pass; the prompt registry and its lint; the retention flow).
-The scheduled deepening — known-issue awareness, continuity,
+pass; the prompt registry and its lint; the retention flow;
+known-issue awareness).
+The scheduled deepening — continuity,
 handoff scoring, cost budgets — is laid out in the blueprint backlog; the
 architecture above is shaped so each lands as a new node,
 desk behavior, or report over the same records, not as a
