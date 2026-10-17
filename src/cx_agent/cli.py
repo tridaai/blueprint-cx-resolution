@@ -12,6 +12,9 @@
     cx-agent annotation-queue the human review queue + agreement
     cx-agent signals         the conversation-signal report (effort,
                              frustration, interventions)
+    cx-agent daily-quality   run the daily quality pass and print
+        [--date YYYY-MM-DD]  its digest (default date: today)
+    cx-agent quality-trend   headline metrics across stored digests
 """
 
 from __future__ import annotations
@@ -113,6 +116,42 @@ def main(argv: list[str] | None = None) -> int:
               f"kappa={agreement['kappa']}, "
               f"disputed={len(agreement['disagreements'])}, "
               f"settled={len(agreement['settled'])}")
+        return 0
+    if cmd == "daily-quality":
+        from datetime import date as _date
+
+        from . import quality
+
+        raw = None
+        if "--date" in argv:
+            raw = argv[argv.index("--date") + 1]
+        elif len(argv) > 1:
+            raw = argv[1]
+        try:
+            on = _date.fromisoformat(raw) if raw else None
+        except ValueError:
+            print(f"not an ISO date: {raw}", file=sys.stderr)
+            return 2
+        digest = service.run_daily_quality(on)
+        print(quality.render_digest_markdown(digest))
+        return 0
+    if cmd == "quality-trend":
+        rows = service.quality_trend()
+        if not rows:
+            print("No digests stored yet — run cx-agent daily-quality.")
+            return 0
+        print(f"{'date':<12}{'version':>8}{'convs':>7}"
+              f"{'resolved':>10}{'top cause':>20}{'effort':>8}"
+              f"{'drift':>7}")
+        for row in rows:
+            share = ("—" if row["resolution_share"] is None
+                     else f"{round(row['resolution_share'] * 100)}%")
+            effort = ("—" if row["avg_effort"] is None
+                      else str(row["avg_effort"]))
+            print(f"{row['date']:<12}{row['version']:>8}"
+                  f"{row['conversations']:>7}{share:>10}"
+                  f"{(row['top_cause'] or '—'):>20}{effort:>8}"
+                  f"{row['drift_count']:>7}")
         return 0
     print(f"unknown command: {cmd}", file=sys.stderr)
     return 2

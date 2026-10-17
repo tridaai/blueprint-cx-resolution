@@ -218,6 +218,29 @@ class ConversationService:
         frustration/escalation table."""
         return signals.signal_report(self.store, self.policy)
 
+    # -- the daily quality pass (round 12) --------------------------
+    def run_daily_quality(self, on=None, with_spot_check: bool = True):
+        """Run the daily quality pass for one date (default: the
+        shared clock's today) and store its digest. Re-running
+        for a date replaces the digest and raises its version.
+        The digest informs humans; it triggers no action."""
+        from . import quality
+
+        return quality.run_daily_pass(
+            self.store, self.policy, on, with_spot_check=with_spot_check)
+
+    def list_digests(self):
+        return self.store.list_digests()
+
+    def get_digest(self, digest_date: str):
+        return self.store.get_digest(digest_date)
+
+    def quality_trend(self) -> list[dict]:
+        """Headline metrics across the stored digests."""
+        from . import quality
+
+        return quality.quality_trend(self.store)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)

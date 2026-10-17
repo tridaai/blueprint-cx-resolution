@@ -134,6 +134,11 @@
     </div>
     <h2 style="margin-top:22px">Conversation signals</h2>
     <div id="signals"><p class="empty">No signal records yet. Every conversation turn records its signals — frustration, the effort it cost the customer, progress, confusion — and the interventions they fired.</p></div>
+    <h2 style="margin-top:22px">Daily quality digest</h2>
+    <div id="quality"><p class="empty">No digest yet. The daily pass composes one day's closed conversations — volume, causes, signals, the complaint book at day end, mining candidates, and a regression spot-check against the committed eval baseline — into a stored snapshot. It informs the team; it triggers nothing.</p></div>
+    <button class="ghost" onclick="runQuality()">Run today's quality pass</button>
+    <div id="quality-note" class="empty" style="margin-top:6px"></div>
+    <div id="quality-trend"></div>
   </section>
 </main>
 <footer>
@@ -170,6 +175,15 @@ async function runAttribution() {
     "Pass attributed " + result.attributed.length + " conversation(s) · " +
     result.already_attributed + " already on record · " +
     result.still_open + " still open.";
+  await refresh();
+}
+
+async function runQuality() {
+  const note = document.getElementById("quality-note");
+  note.textContent = "Running the pass — the spot-check re-runs its sampled scenarios, this takes a few seconds…";
+  const digest = await api("/quality/run", {method: "POST"});
+  note.textContent = "Digest for " + digest.date + " stored (version " +
+    digest.version + "). Re-running the pass for a date replaces its digest and raises the version.";
   await refresh();
 }
 
@@ -545,6 +559,41 @@ async function refresh() {
       ' · escalated only ' + cells.not_rising_and_escalated +
       ' · neither ' + cells.not_rising_not_escalated + '.</p>';
     sbox.innerHTML = html;
+  }
+  const q = await api("/quality/digests");
+  const qbox = document.getElementById("quality");
+  if (!q.digests.length) {
+    qbox.innerHTML = '<p class="empty">No digest yet. The daily pass composes one day\'s closed conversations — volume, causes, signals, the complaint book at day end, mining candidates, and a regression spot-check against the committed eval baseline — into a stored snapshot. It informs the team; it triggers nothing.</p>';
+  } else {
+    const d = q.digests[q.digests.length - 1];
+    const causes = Object.keys(d.cause_mix);
+    let html = '<p class="empty">Latest: ' + d.date + ' (v' + d.version + ') · ' +
+      d.conversations + ' closed conversation(s) · resolution share ' +
+      (d.resolution_share === null ? '—' : Math.round(d.resolution_share * 100) + '%') +
+      ' · average effort ' + (d.signals.avg_effort === null ? '—' : d.signals.avg_effort) +
+      ' · complaints at day end: ' + d.complaints.open + ' open, ' +
+      d.complaints.due_soon + ' due soon, ' + d.complaints.breached + ' breached.</p>';
+    if (causes.length) {
+      html += '<table class="attr"><tr><th>Cause</th><th>Conversations</th></tr>' +
+        causes.map(c => "<tr><td>" + c + "</td><td>" + d.cause_mix[c] + "</td></tr>").join("") +
+        "</table>";
+    }
+    html += '<p class="empty">Spot-check: ' + d.spot_check.summary + '</p>' +
+      '<p class="empty"><a href="/quality/digests/' + d.date + '/markdown">Export this digest as markdown →</a></p>';
+    qbox.innerHTML = html;
+  }
+  const trend = await api("/quality/trend");
+  const tbox = document.getElementById("quality-trend");
+  if (!trend.trend.length) {
+    tbox.innerHTML = "";
+  } else {
+    tbox.innerHTML = '<table class="attr"><tr><th>Date</th><th>Convs</th><th>Resolved</th>' +
+      '<th>Top cause</th><th>Effort</th><th>Drift</th></tr>' +
+      trend.trend.map(r => "<tr><td>" + r.date + "</td><td>" + r.conversations + "</td><td>" +
+        (r.resolution_share === null ? "—" : Math.round(r.resolution_share * 100) + "%") +
+        "</td><td>" + (r.top_cause || "—") + "</td><td>" +
+        (r.avg_effort === null ? "—" : r.avg_effort) + "</td><td>" + r.drift_count +
+        "</td></tr>").join("") + "</table>";
   }
 }
 

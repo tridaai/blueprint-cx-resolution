@@ -349,6 +349,62 @@ def signal_report() -> dict:
     return service.signal_report()
 
 
+@app.post("/quality/run", dependencies=[Depends(require_key)])
+def run_daily_quality(date: str | None = None) -> dict:
+    """Run the daily quality pass for a date (default: today, by
+    the shared clock) and return the stored digest. Re-running
+    for a date replaces the digest and raises its version."""
+    from datetime import date as _date
+
+    try:
+        on = _date.fromisoformat(date) if date else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400,
+                            detail=f"not an ISO date: {date}") from exc
+    return service.run_daily_quality(on).model_dump(mode="json")
+
+
+@app.get("/quality/digests", dependencies=[Depends(require_key)])
+def list_digests() -> dict:
+    return {"digests": [d.model_dump(mode="json")
+                        for d in service.list_digests()]}
+
+
+@app.get("/quality/trend", dependencies=[Depends(require_key)])
+def quality_trend() -> dict:
+    """Headline metrics across the stored digests, oldest first."""
+    return {"trend": service.quality_trend()}
+
+
+@app.get("/quality/digests/{digest_date}",
+         dependencies=[Depends(require_key)])
+def get_digest(digest_date: str) -> dict:
+    digest = service.get_digest(digest_date)
+    if digest is None:
+        raise HTTPException(status_code=404,
+                            detail="no digest for this date — "
+                                   "run the daily pass for it first")
+    return digest.model_dump(mode="json")
+
+
+@app.get("/quality/digests/{digest_date}/markdown",
+         dependencies=[Depends(require_key)])
+def get_digest_markdown(digest_date: str):
+    """The digest as exportable markdown — rendered from the
+    stored record by the one rendering function."""
+    from fastapi.responses import PlainTextResponse
+
+    from . import quality
+
+    digest = service.get_digest(digest_date)
+    if digest is None:
+        raise HTTPException(status_code=404,
+                            detail="no digest for this date — "
+                                   "run the daily pass for it first")
+    return PlainTextResponse(quality.render_digest_markdown(digest),
+                             media_type="text/markdown")
+
+
 @app.get("/signals/{conversation_id}", dependencies=[Depends(require_key)])
 def get_signals(conversation_id: str) -> dict:
     """One conversation's per-turn signal series; the last record
