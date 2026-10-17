@@ -26,6 +26,7 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from . import actions as action_mod
+from . import billing_book
 from . import escalation as esc_mod
 from . import identity as id_mod
 from .config import Policy
@@ -283,6 +284,14 @@ class Supervisor:
             self.store.save_action(record)
             self._audit(conv, "action", {"action_id": record.action_id,
                                          "status": "declined"})
+            case_id = pending.payload.get("dispute_case_id")
+            if case_id:
+                # The case stays opened — the offer was refused, the
+                # dispute wasn't decided — with the answer on record.
+                billing_book.settle_dispute_case(
+                    self.store, conv, case_id, "declined", None,
+                    note=(f"The customer declined the offered credit of "
+                          f"{pending.amount}; nothing was applied."))
             conv.pending_action = None
             conv.specialist_state.pop("pending_desk", None)
             state["action_record"] = record
@@ -318,6 +327,18 @@ class Supervisor:
             return state
         record = action_mod.execute(self.store, conv, pending, self.policy,
                                     confirmed=True)
+        case_id = pending.payload.get("dispute_case_id")
+        if case_id:
+            # The dispute case settles on the credit's outcome: the
+            # applied amount when it lands, or the block on record.
+            if record.status == "executed":
+                billing_book.settle_dispute_case(
+                    self.store, conv, case_id, "executed", record.amount)
+            else:
+                billing_book.settle_dispute_case(
+                    self.store, conv, case_id, "blocked", None,
+                    note=(f"The credit was stopped at execution "
+                          f"({record.block_reason}); nothing was applied."))
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
         state["action_record"] = record

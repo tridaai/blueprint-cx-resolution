@@ -374,6 +374,7 @@ class CreditHistory:
     executed_total: Decimal = ZERO  # goodwill actually applied, in window
     pending_total: Decimal = ZERO  # goodwill proposed in this conversation
     entries: list = field(default_factory=list)
+    offered_here: bool = False  # goodwill already offered in this conversation
 
     @property
     def total(self) -> Decimal:
@@ -407,6 +408,9 @@ def credit_history(store, account_number: str, policy: Policy,
     ]
     executed_here = False
     for record in goodwill:
+        if conversation_id and record.conversation_id == conversation_id \
+                and record.status in ("proposed", "executed"):
+            history.offered_here = True
         if record.status == "executed" and _in_window(
                 record.created_date, policy.credit_history_days, on):
             history.executed_total += record.amount or ZERO

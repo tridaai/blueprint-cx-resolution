@@ -20,6 +20,16 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
+from .billing_book import (
+    assess_dispute,
+    bill_shock,
+    compare_bills,
+    decompose_bill,
+    goodwill_offer,
+    line_evidence,
+    note_goodwill_refusal,
+    open_dispute_case,
+)
 from .config import Policy
 from .money import fmt, plan_change_net
 from .models import (
@@ -69,105 +79,232 @@ _IDENTITY_ASK = (
 # ---------------------------------------------------------------------------
 
 
-def _evidenced_disputes(bill) -> tuple[Decimal, list[str]]:
-    """Charges the bill itself proves wrong: duplicates, charges
-    after cancellation, charges above their expected rate. Returns
-    (total, descriptions)."""
+def _evidenced_total(bill) -> tuple[Decimal, list[str]]:
+    """Charges the bill itself proves wrong, as (total, evidence in
+    words) — the quick scan the explanation and the goodwill gate
+    use. The per-line decisions live in billing_book.assess_dispute."""
     total = Decimal("0")
     items: list[str] = []
     if bill is None:
         return total, items
     for charge in bill.charges:
-        if charge.duplicate_of:
-            total += charge.amount
-            items.append(f"duplicate charge '{charge.description}' of {fmt(charge.amount)}")
-        elif charge.after_cancellation:
-            total += charge.amount
-            items.append(
-                f"'{charge.description}' of {fmt(charge.amount)} charged after cancellation")
-        elif charge.expected_amount is not None and charge.amount > charge.expected_amount:
-            delta = charge.amount - charge.expected_amount
-            total += delta
-            items.append(
-                f"'{charge.description}' billed at {fmt(charge.amount)} "
-                f"against a {fmt(charge.expected_amount)} rate")
+        amount, evidence = line_evidence(charge)
+        if amount > 0:
+            total += amount
+            items.append(evidence)
     return total, items
+
+
+def _goodwill(conv: Conversation, ctx: Ctx, case=None):
+    """Goodwill, decided by the policy's memory.
+
+    Returns (findings, action-or-None) when goodwill is in play for
+    this customer — an offer, or a refusal with the reason said
+    plainly and recorded — and None when it isn't (short tenure, or
+    no customer record to read). The offer is the smaller of the
+    per-offer cap and the headroom the trailing credit history
+    leaves under the rolling cap."""
+    customer = ctx.store.get_customer(conv.customer_id) if conv.customer_id else None
+    if customer is None or customer.tenure_months < 12:
+        return None
+    offer, history = goodwill_offer(ctx.store, conv, ctx.policy)
+    if history.offered_here:
+        return None  # once per conversation (POL-BILL-02)
+    citations = _cite(ctx, "billing", "goodwill credit poor experience")
+    if offer <= 0:
+        days = ctx.policy.credit_history_days
+        note_goodwill_refusal(
+            ctx.store, conv, case,
+            reason=(f"rolling goodwill cap reached: {fmt(history.executed_total)} "
+                    f"credited in the last {days} days against a "
+                    f"{fmt(ctx.policy.goodwill_rolling_cap)} limit"),
+            detail={"history_total": str(history.executed_total),
+                    "rolling_cap": str(ctx.policy.goodwill_rolling_cap),
+                    "window_days": days})
+        return ([Finding(
+            topic="goodwill_refused",
+            text=(f"I'd add a goodwill credit if I could, but I can see "
+                  f"we've already credited {fmt(history.executed_total)} in "
+                  f"goodwill to your account in the last {days} days, and "
+                  f"{fmt(ctx.policy.goodwill_rolling_cap)} is the most we can "
+                  "add in that period — so I can't add another today. That "
+                  "limit is only about goodwill: a charge that's actually "
+                  "wrong still gets put right in full."))],
+            None, citations)
+    findings = [Finding(
+        topic="goodwill",
+        text=(f"Even so, you've been with us {customer.tenure_months} months "
+              "and this has clearly been a frustrating stretch."))]
+    basis = "Goodwill under POL-BILL-02; bill itself is correct."
+    if offer < ctx.policy.goodwill_credit_cap:
+        basis += (" Offer reduced to the headroom left under the rolling "
+                  "goodwill cap.")
+    return (findings, ProposedAction(
+        kind=ActionKind.APPLY_CREDIT,
+        summary=f"apply a goodwill credit of {fmt(offer)}",
+        payload={"credit_class": "goodwill"},
+        amount=offer, basis=basis), citations)
+
+
+def _dispute_result(conv: Conversation, ctx: Ctx, bill,
+                    assessment, unhappy: bool) -> SpecialistResult:
+    """A dispute with identified lines: open the case, say the
+    per-line decisions, and propose the credited sum — or escalate
+    with the case record intact when the evidenced total is above
+    the tier cap."""
+    citations = _cite(ctx, "billing",
+                      "billing dispute duplicate charge credited in full")
+    credited_n = len(assessment.credited)
+    declined_n = len(assessment.declined)
+    basis = (f"Per-line assessment on bill {bill.bill_id} under POL-BILL-01: "
+             f"{credited_n} line(s) credited on evidence, {declined_n} "
+             "declined, the rest escalated." if assessment.escalated else
+             f"Per-line assessment on bill {bill.bill_id} under POL-BILL-01: "
+             f"{credited_n} line(s) credited on evidence, {declined_n} declined.")
+    case = open_dispute_case(ctx.store, conv, bill, assessment, basis)
+
+    if assessment.escalated:
+        evidence_items = [l.evidence for l in assessment.lines if l.evidence]
+        return SpecialistResult(
+            specialist="billing",
+            findings=[Finding(
+                topic="dispute",
+                text=(f"You're right to query this: "
+                      f"{'; '.join(evidence_items)}. That comes to "
+                      f"{fmt(assessment.evidenced_total)}, which is above the "
+                      f"{fmt(ctx.policy.dispute_credit_cap)} I can credit from "
+                      "here, so I'm passing this to our billing team with the "
+                      f"evidence attached. It's logged as dispute case "
+                      f"{case.case_id}, with every line's decision on it."))],
+            citations=citations, progress=True,
+            escalate_reason="dispute_above_agent_cap", escalate_queue="billing")
+
+    findings: list[Finding] = []
+    for line in assessment.lines:
+        if line.decision == "credited":
+            findings.append(Finding(
+                topic="dispute_line",
+                text=f"You're right about this one: {line.evidence}."))
+        elif line.decision == "declined":
+            findings.append(Finding(
+                topic="dispute_line_declined",
+                text=(f"On '{line.description}' of {fmt(line.amount)}: "
+                      f"{line.reason}, so I can't credit that one.")))
+    if assessment.credit_total > 0:
+        findings.append(Finding(
+            topic="dispute_total",
+            text=(f"The amount that shouldn't be there is "
+                  f"{fmt(assessment.credit_total)}.")))
+        return SpecialistResult(
+            specialist="billing", findings=findings,
+            proposed_action=ProposedAction(
+                kind=ActionKind.APPLY_CREDIT,
+                summary=f"credit {fmt(assessment.credit_total)} to your account for the incorrect charge(s)",
+                payload={"credit_class": "dispute",
+                         "dispute_case_id": case.case_id},
+                amount=assessment.credit_total,
+                basis=(f"Evidenced on bill {bill.bill_id}, dispute case "
+                       f"{case.case_id} (POL-BILL-01).")),
+            citations=citations, progress=True)
+
+    # Every disputed line declined: the case stands as the record,
+    # and goodwill may still be in play for the experience.
+    if unhappy:
+        goodwill = _goodwill(conv, ctx, case=case)
+        if goodwill is not None:
+            gw_findings, gw_action, gw_citations = goodwill
+            return SpecialistResult(
+                specialist="billing", findings=findings + gw_findings,
+                proposed_action=gw_action,
+                citations=citations + [c for c in gw_citations
+                                       if c not in citations],
+                progress=True)
+    return SpecialistResult(
+        specialist="billing", findings=findings,
+        citations=citations, progress=True)
+
+
+def _shock_text(shock: dict) -> str:
+    """The bill-shock lead: the jump and its computed driver. Every
+    figure in it comes out of billing_book.bill_shock."""
+    driver = shock["driver"]
+    lead = (f"This bill is {fmt(shock['increase'])} higher than your recent "
+            f"average of {fmt(shock['average'])}.")
+    top = driver["top_line"]
+    if driver["family"] == "one_off" and top is not None:
+        if driver["is_new"]:
+            return (f"{lead} One charge drives it: '{top.description}' at "
+                    f"{fmt(top.amount)} — a one-off that wasn't on your "
+                    "previous bill.")
+        return (f"{lead} The main driver is a one-off charge: "
+                f"'{top.description}' at {fmt(top.amount)}.")
+    if driver["is_new"]:
+        return (f"{lead} The main driver is {driver['label'].lower()} — "
+                f"{fmt(driver['current'])} this month, where your previous "
+                "bill had none.")
+    return (f"{lead} The main driver is {driver['label'].lower()} — "
+            f"{fmt(driver['current'])} this month against "
+            f"{fmt(driver['previous'])} last month.")
+
+
+def _comparison_text(current, previous) -> str:
+    """The month-on-month read, from the computed deltas only."""
+    changed = [r for r in compare_bills(current, previous) if r["delta"] != 0]
+    if not changed:
+        return (f"Against your previous bill of {fmt(previous.total)}, "
+                "nothing moved — every charge family is the same.")
+    parts = [
+        f"{r['label'].lower()} {'up' if r['delta'] > 0 else 'down'} "
+        f"{fmt(abs(r['delta']))}"
+        for r in changed
+    ]
+    return (f"Against your previous bill of {fmt(previous.total)}: "
+            + "; ".join(parts) + ".")
 
 
 def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     if not conv.account_number:
         return _needs_identity("billing", _IDENTITY_ASK)
-    account = _account(ctx, conv)
     bill = ctx.store.get_bill_for_account(conv.account_number)
+    bills = ctx.store.list_bills_for_account(conv.account_number)
+    previous_bills = bills[:-1] if len(bills) > 1 else []
     lowered = text.lower()
     dispute = any(w in lowered for w in (
         "dispute", "wrong", "shouldn't", "shouldnt", "charged twice",
         "refund", "fix it", "duplicate", "error", "charged after",
         "not fair", "remove the charge"))
-    evidence_total, evidence_items = _evidenced_disputes(bill)
-
-    if dispute and evidence_total > 0:
-        citations = _cite(ctx, "billing", "billing dispute duplicate charge credited in full")
-        if evidence_total > ctx.policy.dispute_credit_cap:
-            return SpecialistResult(
-                specialist="billing",
-                findings=[Finding(
-                    topic="dispute",
-                    text=(f"You're right to query this: {'; '.join(evidence_items)}. "
-                          f"That comes to {fmt(evidence_total)}, which is above the "
-                          f"{fmt(ctx.policy.dispute_credit_cap)} I can credit from "
-                          "here, so I'm passing this to our billing team with the "
-                          "evidence attached."))],
-                citations=citations, progress=True,
-                escalate_reason="dispute_above_agent_cap", escalate_queue="billing")
-        return SpecialistResult(
-            specialist="billing",
-            findings=[Finding(
-                topic="dispute",
-                text=(f"You're right: {'; '.join(evidence_items)}. "
-                      f"The amount that shouldn't be there is {fmt(evidence_total)}."))],
-            proposed_action=ProposedAction(
-                kind=ActionKind.APPLY_CREDIT,
-                summary=f"credit {fmt(evidence_total)} to your account for the incorrect charge(s)",
-                payload={"credit_class": "dispute"},
-                amount=evidence_total,
-                basis=f"Evidenced on bill {bill.bill_id}: {'; '.join(evidence_items)} (POL-BILL-01)."),
-            citations=citations, progress=True)
-
-    # Goodwill: the bill is right, the experience wasn't. Available
-    # whether or not the customer used the word "dispute".
     unhappy = any(w in lowered for w in ("expensive", "too much", "goodwill",
                                          "unhappy", "loyal", "ridiculous",
                                          "fed up"))
-    customer = ctx.store.get_customer(conv.customer_id) if conv.customer_id else None
-    prior_goodwill = any(
-        a.kind == ActionKind.APPLY_CREDIT
-        and a.payload.get("credit_class") == "goodwill"
-        and a.status in ("proposed", "executed")
-        for a in ctx.store.list_actions(conv.conversation_id))
-    if unhappy and evidence_total == 0 and customer \
-            and customer.tenure_months >= 12 and not prior_goodwill:
-        findings = []
-        if dispute:
-            findings.append(Finding(
-                topic="dispute_checked",
-                text=("I've checked every line against the rates and dates on "
-                      "the account, and each charge matches what the bill "
-                      "should be — there isn't an incorrect charge to credit.")))
-        findings.append(Finding(
-            topic="goodwill",
-            text=(f"Even so, you've been with us {customer.tenure_months} months "
-                  "and this has clearly been a frustrating stretch.")))
-        return SpecialistResult(
-            specialist="billing", findings=findings,
-            proposed_action=ProposedAction(
-                kind=ActionKind.APPLY_CREDIT,
-                summary=f"apply a goodwill credit of {fmt(ctx.policy.goodwill_credit_cap)}",
-                payload={"credit_class": "goodwill"},
-                amount=ctx.policy.goodwill_credit_cap,
-                basis="Goodwill under POL-BILL-02; bill itself is correct."),
-            citations=_cite(ctx, "billing", "goodwill credit poor experience"),
-            progress=True)
+    evidence_total, evidence_items = _evidenced_total(bill)
+
+    # A dispute with identified lines becomes a case, decided line
+    # by line: evidenced lines credit, named-but-clean lines
+    # decline with reasons, an over-cap total escalates.
+    if dispute and bill is not None:
+        assessment = assess_dispute(bill, text, ctx.policy)
+        if assessment.lines:
+            return _dispute_result(conv, ctx, bill, assessment, unhappy)
+
+    # Goodwill: the bill is right, the experience wasn't. Available
+    # whether or not the customer used the word "dispute" — and
+    # bounded by the account's credit history, not just this chat.
+    if unhappy and evidence_total == 0:
+        goodwill = _goodwill(conv, ctx)
+        if goodwill is not None:
+            gw_findings, gw_action, gw_citations = goodwill
+            findings = []
+            if dispute:
+                findings.append(Finding(
+                    topic="dispute_checked",
+                    text=("I've checked every line against the rates and dates on "
+                          "the account, and each charge matches what the bill "
+                          "should be — there isn't an incorrect charge to credit.")))
+            findings += gw_findings
+            return SpecialistResult(
+                specialist="billing", findings=findings,
+                proposed_action=gw_action, citations=gw_citations,
+                progress=True)
 
     if dispute and evidence_total == 0:
         return SpecialistResult(
@@ -180,29 +317,44 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             citations=_cite(ctx, "billing", "bill itemised lines correct charges"),
             progress=True)
 
-    # Explain the bill.
+    # Explain the bill: family by family, against last month's —
+    # and when the jump is a shock, the driver leads, not the lines.
     if bill is None:
         return SpecialistResult(
             specialist="billing",
             findings=[Finding(topic="no_bill",
                               text="There's no bill issued on this account yet.")],
             progress=True)
-    findings = [Finding(
+    findings: list[Finding] = []
+    shock = bill_shock(bill, previous_bills, ctx.policy)
+    if shock is not None:
+        findings.append(Finding(topic="bill_shock", text=_shock_text(shock)))
+    findings.append(Finding(
         topic="bill_summary",
         text=(f"Your bill issued {bill.issued} for {bill.cycle_start} to "
               f"{bill.cycle_end} totals {fmt(bill.total)} and is due {bill.due}. "
-              "Here is what makes it up:"))]
+              "Here is what makes it up:")))
     must_include = [f"{c.description}: {fmt(c.amount)}" for c in bill.charges]
+    for group in decompose_bill(bill):
+        must_include.append(f"{group['label']} total: {fmt(group['total'])}")
+    if previous_bills:
+        previous = previous_bills[-1]
+        findings.append(Finding(
+            topic="bill_comparison", text=_comparison_text(bill, previous)))
+        for row in compare_bills(bill, previous):
+            if row["delta"] != 0:
+                must_include.append(
+                    f"{row['label']}: {fmt(row['current'])} "
+                    f"(was {fmt(row['previous'])})")
     if evidence_total > 0:
         findings.append(Finding(
             topic="bill_flag",
             text=(f"One thing stands out: {'; '.join(evidence_items)}. "
                   "Say the word and I'll credit that back.")))
-    result = SpecialistResult(
+    return SpecialistResult(
         specialist="billing", findings=findings,
         citations=_cite(ctx, "billing", "itemised bill lines total due date"),
         must_include=must_include, progress=True, resolved=True)
-    return result
 
 
 # ---------------------------------------------------------------------------
