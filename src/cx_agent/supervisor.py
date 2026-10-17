@@ -27,6 +27,7 @@ from langgraph.graph import END, StateGraph
 
 from . import actions as action_mod
 from . import billing_book
+from . import incidents as incidents_mod
 from . import payments_book
 from . import retention_book
 from . import escalation as esc_mod
@@ -905,8 +906,47 @@ class Supervisor:
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
 
+    def _known_issue(self, state: TurnState) -> SpecialistResult | None:
+        """Known-issue awareness (round 15): before the technical
+        desk works a fault, the incident feed is read — in code,
+        deterministically (incidents.match_for_turn). On a match
+        the desk never runs: no procedure is started or continued
+        for the matched symptom, no unrelated action is proposed,
+        and the reply acknowledges the known issue from the
+        incident record itself, offering the book's callback
+        follow-up instead. A walk already running for that same
+        fault is abandoned with the match as its outcome — its
+        history stays on the record for whoever picks it up. No
+        match, and the turn is the desk's, exactly as before."""
+        conv, text = state["conv"], state["text"]
+        matched = incidents_mod.match_for_turn(self.store, conv, text)
+        if matched is None:
+            return None
+        incident, signals = matched
+        incidents_mod.record_match(self.store, conv, incident, signals)
+        tech = conv.specialist_state.get("technical", {})
+        run_id = tech.get("run_id")
+        if run_id:
+            run = self.store.get_procedure_run(run_id)
+            if run is not None and run.state == "active":
+                proc = self.store.get_procedure_version(
+                    run.procedure_id, run.procedure_version) \
+                    or self.store.get_procedure(run.procedure_id)
+                if proc is not None and proc.symptom == incident.service:
+                    procedures.abandon_run(
+                        self.store, conv, "matched_known_incident")
+                    tech.pop("run_id", None)
+                    tech.pop("procedure_id", None)
+        return incidents_mod.acknowledgement_result(
+            self.ctx, conv, incident, signals)
+
     def _specialist(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
+        if conv.intent == Intent.TECHNICAL:
+            known = self._known_issue(state)
+            if known is not None:
+                state["result"] = known
+                return state
         fn = SPECIALISTS.get(conv.intent, care)
         result = fn(conv, text, self.ctx)
         # The escalation rubric's first-ask rule: a customer who asks

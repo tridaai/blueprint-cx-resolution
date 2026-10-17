@@ -67,8 +67,11 @@ _CALLBACK_BASIS = "Guided procedure exhausted without resolution (POL-TECH-01)."
 
 # Postcodes with a known network outage on the book. A coverage
 # check at one of these reports the outage instead of clearing
-# the area; no seeded customer lives at one — it is the register a
-# deployment fills from its incident feed.
+# the area; no seeded customer lives at one — it is the static
+# register beside the live one: since round 15 the coverage tool
+# also reads the incident feed itself (a live no-signal incident
+# covering the customer's postcode), which is the register a
+# deployment actually fills.
 OUTAGE_POSTCODES: set[str] = {"99999"}
 
 _NUMBER = re.compile(r"(\d+(?:\.\d+)?)")
@@ -93,7 +96,23 @@ def _tool_coverage_ok(ctx, conv, run) -> tuple[str, Finding | None]:
     account = _account(ctx, conv, run)
     if account is not None:
         customer = ctx.store.get_customer(account.customer_id)
-    if customer is not None and customer.postcode in OUTAGE_POSTCODES:
+    # The incident feed is the live outage register (round 15): a
+    # no-signal incident still active or monitoring whose scope
+    # covers this postcode reports the outage here too. Read off
+    # the store directly — the feed's records, no matching rules:
+    # this tool answers for one postcode, not for a conversation.
+    feed_outage = False
+    if customer is not None:
+        for incident in ctx.store.list_incidents():
+            if incident.service == "no_signal" \
+                    and incident.status in ("active", "monitoring") \
+                    and (not incident.affected_postcodes
+                         or customer.postcode
+                         in incident.affected_postcodes):
+                feed_outage = True
+                break
+    if customer is not None and (customer.postcode in OUTAGE_POSTCODES
+                                 or feed_outage):
         return "outage", Finding(
             topic="check",
             text=("I've checked coverage at your postcode: there is a "

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import incidents as incidents_mod
 from . import signals as signals_mod
 from .config import Policy
 from .models import Conversation, HandoffPacket
@@ -122,6 +123,17 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
             f"{sig_summary['frustration_trend']}; "
             f"{len(sig_summary['interventions'])} signal intervention(s) "
             "already tried — see the packet's signal summary.")
+    # A matched known issue rides the packet (round 15): the
+    # incidents this conversation matched that are still live on
+    # the feed, as the records state them — the human sees the
+    # customer was already told about a known fault, and exactly
+    # what they were told.
+    known_incidents = incidents_mod.packet_incidents(store, conv)
+    for known in known_incidents:
+        open_items.append(
+            f"Known issue {known['incident_id']}: {known['title']} "
+            f"({known['status']}) — acknowledged to the customer "
+            f"from the incident record.")
     return HandoffPacket(
         conversation_id=conv.conversation_id,
         queue=queue,
@@ -135,4 +147,5 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         actions_taken=taken,
         open_items=open_items,
         signals=sig_summary,
+        known_incidents=known_incidents,
     )
