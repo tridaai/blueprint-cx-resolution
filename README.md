@@ -238,6 +238,47 @@ verdict where they disagree. Nothing in the loop acts on its
 own — it is evidence for the humans designing desks and
 intents.
 
+## The day, read back whole
+
+Once a day the pieces above are composed into one stored
+**daily quality digest** (`cx-agent daily-quality --date
+YYYY-MM-DD`, `POST /quality/run`, the console's digest panel):
+the day's closed conversations — volume by entry desk and
+outcome, the cause mix with designed escalations counted
+apart, the signal aggregates (average effort, how often
+frustration rose, what the offers of a person did), the
+complaint book's SLA state at day end, the day's top
+unhandled-intent candidates, and escalation counts by reason.
+Every figure is derived from the day's records in code; the
+digest is a snapshot, and re-running the pass for a date
+replaces it — the new digest's version number records that it
+did, so a replacement is never silent. One function renders
+the stored record to markdown, and the API, the CLI and the
+console all show that same rendering. A trend view lines the
+stored digests up — volume, resolution share, top cause,
+average effort, drift — so a bad day is visible against the
+days around it.
+
+The pass also re-runs a deterministic sample of the eval
+trajectories against the current build — every scenario whose
+id hashes into one-in-four, topped up to at least one per
+rubric — and compares them with the committed baseline in
+`evals/results.json`. An assertion that was green in the
+baseline and fails now is reported as **drift**, with the
+scenario, the assertion, and the expected and actual values;
+no drift, and the digest says so in one line. The baseline
+records per-scenario counts rather than per-assertion history,
+so drift is defined at exactly that granularity — a sampled
+scenario failing now that the baseline never recorded as green
+is listed as unbaselined, not dressed up as drift.
+
+One honest scope note: conversations carry no closing date of
+their own, so a digest's day is the conversations *attributed*
+that day. The pass runs attribution first, which means a
+digest run for today is complete; a conversation that merely
+stopped joins the day an operator attributes it. And the
+digest informs humans — nothing anywhere acts on it.
+
 ## The rules are code
 
 - **Identity** — unverified → verifying → verified / failed.
@@ -336,7 +377,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (243 tests) covers the deterministic core —
+The pytest suite (258 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, care records and the mining pass, failure
@@ -382,6 +423,10 @@ src/cx_agent/
                    and its rising rule, the counted effort score,
                    confusion detection, the per-turn snapshot, the
                    packet summary and the operator report
+  quality.py       the daily quality pass: the digest composed
+                   from a day's records, the regression
+                   spot-check against the committed baseline,
+                   the trend view, the markdown rendering
   explanations.py  second explanation forms: summary-first
                    restatements and worked examples for the top
                    topics, plus the bill's summary-first form
@@ -414,8 +459,8 @@ into the records themselves.
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
 - Specialists are still on their happy paths in places.
-  Retention flows and the daily quality pass are designed
-  (see `docs/architecture.md`) and land in later rounds.
+  Retention flows are designed (see `docs/architecture.md`)
+  and land in later rounds.
 - The offline fallback drafts competently from findings because
   the findings are written as sentences; it does not understand
   free-form customer language the way a model does. Routing and

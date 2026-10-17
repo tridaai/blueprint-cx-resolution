@@ -756,15 +756,70 @@ records; its frustration × escalation table is counts only, and
 the payload carries the descriptive label so the numbers are
 never quoted as a cause.
 
+## The daily quality pass
+
+`quality.py` composes the standing reports into one stored
+snapshot per day. The day's scope is the attribution record's
+`attributed_date` — conversations carry no closing date of
+their own, and rather than invent one the pass runs
+`attribution.run_attribution` first, so a digest for today
+covers everything closed up to the run, and a digest for a
+past date reports exactly what was attributed that day. The
+composition reads records only: outcome and entry-desk volume
+and the cause mix from the day's attribution records (designed
+escalations and causeless endings counted apart, as the
+attribution report counts them); the signal measures folded
+over the day's signal records with `signals.signal_report`'s
+own counting rules, so the digest and the standing report
+cannot disagree; the complaint book read at day end through
+`care_book.complaint_sla_state` with the digest date as the
+reading date; the mining pass scoped to the day's conversation
+set (an additive scope parameter — the standalone report still
+mines the whole store); escalations counted by reason over the
+day's conversations.
+
+The digest (`DailyDigest`, migration 0010, keyed by date) is a
+snapshot: a re-run for the same date replaces the record and
+raises its `version`. `render_digest_markdown` is the single
+rendering function — API export, CLI output, and the console
+panel all show its output, and it recomputes nothing.
+`quality_trend` derives the headline table (volume, resolution
+share, top cause with alphabetical tie-break, average effort,
+drift count) from the stored digests only.
+
+The regression spot-check re-runs sampled eval scenarios
+through the eval runner's own machinery — the runner is loaded
+as a module and its `check_turn` / `check_final` grade the
+sample, so the comparison is against the gate's own grading —
+and diffs the failures against the committed baseline,
+`evals/results.json`. The sample rule is deterministic:
+SHA-256 of the scenario id modulo `daily_spot_check_modulus`
+(the repo's sampling convention, as in the annotation queue),
+topped up with the first scenario of any rubric the hash left
+out. The baseline's granularity is the scenario (assertions
+passed of total), so DRIFT is defined as an assertion failing
+now in a scenario the baseline records as fully green, and the
+finding carries the scenario, where it failed, the assertion,
+and the runner's expected vs actual (the runner renders scalar
+actuals as `key=value`; the finding strips the repeated key).
+A sampled scenario failing now without a green baseline record
+is reported under `unbaselined_failing` — visible, and never
+counted as drift. With no baseline file the spot-check says so
+and claims nothing.
+
+The digest triggers no automated action anywhere. It is an
+operator artifact: read in the console, exported as markdown,
+diffed day over day in the trend view.
+
 ## Round map
 
-This document describes rounds 1–11 (core; rerouting and
+This document describes rounds 1–12 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
-annotation queue; conversation signals). The scheduled
-deepening — the retention flow, the daily quality pass, the
+annotation queue; conversation signals; the daily quality
+pass). The scheduled deepening — the retention flow, the
 prompt registry, handoff scoring, cost budgets — is laid out in
 the blueprint backlog; the architecture above is shaped so each
 lands as a new node, desk behavior, or report over the same
