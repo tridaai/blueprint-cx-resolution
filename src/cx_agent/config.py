@@ -32,15 +32,36 @@ def store_profile() -> tuple[str, str]:
 @dataclass(frozen=True)
 class Policy:
     """The governed thresholds. Every number a rule depends on is
-    named here (and overridable by env), never buried in a prompt."""
+    named here (and overridable by env), never buried in a prompt.
 
-    # A credit the agent may propose on its own authority when the
-    # customer is unhappy but the bill is correct.
+    The credit rules form two named tiers. The EVIDENCED tier pays
+    back what the bill itself proves wrong, in full, up to its cap;
+    above the cap the dispute case escalates with its record intact.
+    The GOODWILL tier pays for a poor experience when the bill is
+    right: a smaller per-offer cap, and a rolling cap across the
+    account's trailing credit history that the policy reads in code
+    before any offer is made."""
+
+    # GOODWILL tier, per offer: a credit the agent may propose on
+    # its own authority when the customer is unhappy but the bill
+    # is correct.
     goodwill_credit_cap: Decimal = Decimal("25.00")
-    # A credit backed by evidence on the bill itself (duplicate
-    # charge, charge after cancellation, wrong rate). Above this the
-    # case escalates to the billing team instead of being credited.
+    # GOODWILL tier, rolling: the most goodwill an account may
+    # receive inside the trailing credit-history window. Goodwill
+    # beyond it is refused in code, with the reason recorded — the
+    # evidenced tier is never touched by goodwill history.
+    goodwill_rolling_cap: Decimal = Decimal("50.00")
+    # The trailing window the credit history is read over, in days.
+    credit_history_days: int = 90
+    # EVIDENCED tier: a credit backed by evidence on the bill itself
+    # (duplicate charge, charge after cancellation, wrong rate).
+    # Above this the case escalates to the billing team instead of
+    # being credited.
     dispute_credit_cap: Decimal = Decimal("50.00")
+    # A bill whose total exceeds the account's trailing average by
+    # at least this percentage is a bill-shock bill: its explanation
+    # leads with the computed driver, not the line-by-line.
+    bill_shock_threshold_pct: Decimal = Decimal("25")
     # Roaming fair-use ceiling per trip, in GB, from the roaming
     # policy corpus. Past it the agent must warn before selling more.
     roaming_fair_use_gb: int = 25
@@ -64,7 +85,11 @@ class Policy:
         base = cls()
         return cls(
             goodwill_credit_cap=dec("CX_GOODWILL_CREDIT_CAP", str(base.goodwill_credit_cap)),
+            goodwill_rolling_cap=dec("CX_GOODWILL_ROLLING_CAP", str(base.goodwill_rolling_cap)),
+            credit_history_days=num("CX_CREDIT_HISTORY_DAYS", base.credit_history_days),
             dispute_credit_cap=dec("CX_DISPUTE_CREDIT_CAP", str(base.dispute_credit_cap)),
+            bill_shock_threshold_pct=dec(
+                "CX_BILL_SHOCK_THRESHOLD_PCT", str(base.bill_shock_threshold_pct)),
             roaming_fair_use_gb=num("CX_ROAMING_FAIR_USE_GB", base.roaming_fair_use_gb),
             max_no_progress_turns=num("CX_MAX_NO_PROGRESS_TURNS", base.max_no_progress_turns),
             otp_max_attempts=num("CX_OTP_MAX_ATTEMPTS", base.otp_max_attempts),
