@@ -391,3 +391,35 @@ def test_signal_records(kind, tmp_path):
     store.save_signal_record(first)
     assert len(store.list_signal_records("CONV-T")) == 2
     assert store.list_signal_records("CONV-T")[0].progress is False
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
+def test_quality_digests(kind, tmp_path):
+    """Round 12 records behave identically on every store: one
+    digest per date, listed in date order, and saving a digest
+    for a date that already has one replaces it — the version
+    on the record is what counts the replacement."""
+    from cx_agent.models import DailyDigest
+
+    stores = dict(_stores(tmp_path))
+    if kind not in stores:
+        pytest.skip("CX_TEST_DATABASE_URL not set")
+    store = stores[kind]
+    seed_store(store)
+
+    later = DailyDigest(date="2026-10-01", version=1, conversations=12,
+                        cause_mix={"policy_limit": 1},
+                        spot_check={"drift_count": 0})
+    earlier = DailyDigest(date="2026-09-30", version=1, conversations=8)
+    store.save_digest(later)  # saved out of order; reads sort by date
+    store.save_digest(earlier)
+    assert store.list_digests() == [earlier, later]
+    assert store.get_digest("2026-10-01") == later
+    assert store.get_digest("2026-09-01") is None
+
+    replaced = DailyDigest(date="2026-10-01", version=2, conversations=12,
+                           cause_mix={"policy_limit": 1},
+                           spot_check={"drift_count": 1})
+    store.save_digest(replaced)
+    assert len(store.list_digests()) == 2
+    assert store.get_digest("2026-10-01") == replaced
