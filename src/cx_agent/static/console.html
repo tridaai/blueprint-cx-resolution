@@ -88,6 +88,14 @@
     <div id="attempts"><p class="empty">No payment attempts. Every charge run against a card on file — approved, or declined with its reason and class — lands here.</p></div>
     <h2 style="margin-top:22px">Payment notices</h2>
     <div id="payment-notices"><p class="empty">No payment notices. When an automatic payment fails, the notice carrying its figures — the summary the customer is shown at their next contact — lands here.</p></div>
+    <h2 style="margin-top:22px">Complaints</h2>
+    <div id="complaints"><p class="empty">No complaints. When a customer complains, the record — their words, the category, the response deadline the SLA clock runs against — lands here.</p></div>
+    <button class="ghost" onclick="runWatch()">Run complaint SLA watch</button>
+    <div id="watch-note" class="empty" style="margin-top:6px"></div>
+    <h2 style="margin-top:22px">Feedback &amp; compliments</h2>
+    <div id="feedback"><p class="empty">No feedback recorded. Compliments and general feedback are kept verbatim — the business mines them.</p></div>
+    <h2 style="margin-top:22px">Unhandled-intent candidates</h2>
+    <div id="mining"><p class="empty">No candidates yet. The mining pass clusters the conversations that ended unhandled; a cluster at three or more is a candidate intent for a human to design.</p></div>
   </section>
 </main>
 <footer>
@@ -107,6 +115,14 @@ async function api(path, opts) {
 
 async function seed() {
   await api("/seed", {method: "POST"});
+  await refresh();
+}
+
+async function runWatch() {
+  const result = await api("/complaints/watch", {method: "POST"});
+  document.getElementById("watch-note").textContent =
+    "Watch run " + result.on + ": " + result.raised.length + " breach(es) raised to the queue" +
+    (result.due_soon.length ? " · " + result.due_soon.length + " due soon" : "") + ".";
   await refresh();
 }
 
@@ -195,7 +211,8 @@ async function refresh() {
       div.innerHTML = "<h3>" + e.escalation_id + " — queue: " + e.queue + "</h3>" +
         '<div class="k">Reason</div><div>' + e.reason + '</div>' +
         '<div class="k">Customer</div><div>' + (p.customer_name || "—") + " · " + (p.account_number || "—") +
-        " · identity: " + p.identity_state + '</div>' +
+        " · identity: " + p.identity_state +
+        (p.vulnerable ? ' · <span class="chip red">vulnerability flag</span>' : "") + '</div>' +
         '<div class="k">Summary</div><div>' + p.summary + '</div>' +
         '<div class="k">Attempts</div><ul>' + p.attempts.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
         '<div class="k">Actions taken</div><ul>' + p.actions_taken.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
@@ -315,6 +332,62 @@ async function refresh() {
         " · card ending " + (n.method_last4 || "—") + " · $" + n.amount + " · " + n.created_date + "</div>" +
         '<div class="k">Summary shown</div><div>' + n.summary + "</div>";
       pbox.appendChild(div);
+    }
+  }
+  const cmp = await api("/complaints");
+  const cmbox = document.getElementById("complaints");
+  if (!cmp.complaints.length) {
+    cmbox.innerHTML = '<p class="empty">No complaints. When a customer complains, the record — their words, the category, the response deadline the SLA clock runs against — lands here.</p>';
+  } else {
+    cmbox.innerHTML = "";
+    for (const c of cmp.complaints) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      const sla = c.sla_state === "breached" ? '<span class="chip red">SLA breached</span>'
+        : c.sla_state === "due_soon" ? '<span class="chip red">due soon</span>'
+        : c.sla_state === "settled" ? '<span class="chip green">settled</span>'
+        : '<span class="chip">open</span>';
+      div.innerHTML = "<h3>" + c.complaint_id + " — " + c.category.replace(/_/g, " ") + "</h3>" +
+        sla +
+        '<div class="k">Account · recorded · response due</div><div>' + (c.account_number || "—") +
+        " · " + c.created_date + " · " + c.response_due + "</div>" +
+        '<div class="k">Status</div><div>' + c.status +
+        (c.sla_escalation_id ? " · raised to the queue as " + c.sla_escalation_id : "") + "</div>" +
+        '<div class="k">The customer\'s words</div><div>' + c.text + "</div>";
+      cmbox.appendChild(div);
+    }
+  }
+  const fbk = await api("/feedback");
+  const fbox = document.getElementById("feedback");
+  if (!fbk.feedback.length) {
+    fbox.innerHTML = '<p class="empty">No feedback recorded. Compliments and general feedback are kept verbatim — the business mines them.</p>';
+  } else {
+    fbox.innerHTML = "";
+    for (const f of fbk.feedback) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>" + f.record_id + " — " + f.kind + "</h3>" +
+        '<div class="k">Account · recorded</div><div>' + (f.account_number || "—") +
+        " · " + f.created_date + "</div>" +
+        '<div class="k">The customer\'s words</div><div>' + f.text + "</div>";
+      fbox.appendChild(div);
+    }
+  }
+  const min = await api("/care/mining");
+  const mnbox = document.getElementById("mining");
+  if (!min.candidates.length) {
+    mnbox.innerHTML = '<p class="empty">No candidates yet. The mining pass clusters the conversations that ended unhandled; a cluster at three or more is a candidate intent for a human to design.</p>' +
+      '<p class="empty">Scanned ' + min.conversations_scanned + ' conversations · ' + min.unhandled_utterances + ' unhandled utterances.</p>';
+  } else {
+    mnbox.innerHTML = '<p class="empty">Scanned ' + min.conversations_scanned + ' conversations · ' +
+      min.unhandled_utterances + ' unhandled utterances · threshold ' + min.min_cluster + '.</p>';
+    for (const c of min.candidates) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = "<h3>“" + c.label + "” — " + c.count + " conversations</h3>" +
+        '<div class="k">Samples, verbatim</div><ul>' +
+        c.samples.map(s => "<li>" + s + "</li>").join("") + "</ul>";
+      mnbox.appendChild(div);
     }
   }
 }

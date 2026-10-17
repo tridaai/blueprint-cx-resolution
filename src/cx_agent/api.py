@@ -203,6 +203,51 @@ def list_payment_notices(account_number: str | None = None) -> dict:
                         service.list_payment_notices(account_number)]}
 
 
+@app.get("/complaints", dependencies=[Depends(require_key)])
+def list_complaints(conversation_id: str | None = None,
+                    account_number: str | None = None) -> dict:
+    from . import care_book
+    rows = []
+    for c in service.list_complaints(conversation_id, account_number):
+        row = c.model_dump(mode="json")
+        row["sla_state"] = care_book.complaint_sla_state(
+            c, service.policy)
+        rows.append(row)
+    return {"complaints": rows}
+
+
+@app.get("/complaints/{complaint_id}", dependencies=[Depends(require_key)])
+def get_complaint(complaint_id: str) -> dict:
+    from . import care_book
+    record = service.get_complaint(complaint_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="no such complaint")
+    row = record.model_dump(mode="json")
+    row["sla_state"] = care_book.complaint_sla_state(record, service.policy)
+    return row
+
+
+@app.post("/complaints/watch", dependencies=[Depends(require_key)])
+def run_complaint_watch() -> dict:
+    """Run the SLA watch: breached complaints are raised to the
+    human queue with their records attached."""
+    return service.run_complaint_watch()
+
+
+@app.get("/feedback", dependencies=[Depends(require_key)])
+def list_feedback(conversation_id: str | None = None,
+                  account_number: str | None = None) -> dict:
+    return {"feedback": [f.model_dump(mode="json") for f in
+                         service.list_feedback(conversation_id, account_number)]}
+
+
+@app.get("/care/mining", dependencies=[Depends(require_key)])
+def mining_report() -> dict:
+    """The unhandled-intent mining report: candidate clusters
+    for humans designing new intents. Creates nothing."""
+    return service.mining_report()
+
+
 @app.get("/")
 def console() -> FileResponse:
     return FileResponse(_CONSOLE, media_type="text/html")

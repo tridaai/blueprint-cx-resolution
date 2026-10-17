@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 import uuid
 
+from . import care_book, mining
+from .clock import today
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import make_llm
-from .models import Conversation, TurnResult
+from .models import Conversation, Escalation, HandoffPacket, TurnResult
 from .retrieval import PolicyRetriever
 from .store import Store, make_store
 from .supervisor import Supervisor
@@ -80,6 +82,81 @@ class ConversationService:
 
     def list_payment_notices(self, account_number: str | None = None):
         return self.store.list_payment_notices(account_number)
+
+    def list_complaints(self, conversation_id: str | None = None,
+                        account_number: str | None = None):
+        return self.store.list_complaints(conversation_id, account_number)
+
+    def get_complaint(self, complaint_id: str):
+        return self.store.get_complaint(complaint_id)
+
+    def list_feedback(self, conversation_id: str | None = None,
+                      account_number: str | None = None):
+        return self.store.list_feedback(conversation_id, account_number)
+
+    # -- the complaint watch and the mining pass ---------------------------
+
+    def complaint_watch(self) -> dict:
+        """The watch as a read: breached and near-breach open
+        complaints, from the records and the calendar."""
+        return care_book.complaint_watch(self.store, self.policy)
+
+    def run_complaint_watch(self) -> dict:
+        """The watch as an act: every breached complaint not
+        already raised goes to the human queue with its record
+        attached — the summary carries the category, the missed
+        deadline and the customer's words — and the complaint
+        record keeps the queue entry's id, so the watch never
+        raises the same breach twice."""
+        watch = care_book.complaint_watch(self.store, self.policy)
+        raised = []
+        for record in watch["breached"]:
+            if record.sla_escalation_id:
+                continue
+            conv = self.store.get_conversation(record.conversation_id)
+            customer = (self.store.get_customer_by_account(
+                record.account_number) if record.account_number else None)
+            packet = HandoffPacket(
+                conversation_id=record.conversation_id,
+                queue="general",
+                reason="complaint_sla_breach",
+                identity_state=(conv.identity_state.value if conv
+                                else "unverified"),
+                vulnerable=bool(customer and customer.vulnerable),
+                customer_name=customer.full_name if customer else "",
+                account_number=record.account_number,
+                summary=(
+                    f"Complaint {record.complaint_id} "
+                    f"({record.category.replace('_', ' ')}) recorded "
+                    f"{record.created_date} passed its response deadline "
+                    f"{record.response_due} still open. The customer's "
+                    f"words: {record.text[:160]}"),
+                open_items=[
+                    f"Complaint {record.complaint_id} awaits its "
+                    f"substantive response "
+                    f"(deadline {record.response_due})."],
+            )
+            esc = Escalation(
+                escalation_id=f"ESC-{uuid.uuid4().hex[:10]}",
+                conversation_id=record.conversation_id,
+                queue="general",
+                reason="complaint_sla_breach",
+                turn=conv.turns if conv else 0,
+                packet=packet,
+                created_date=today().isoformat())
+            self.store.save_escalation(esc)
+            record.sla_escalation_id = esc.escalation_id
+            self.store.save_complaint(record)
+            raised.append(esc.escalation_id)
+        return {"on": watch["on"], "raised": raised,
+                "breached": [c.complaint_id for c in watch["breached"]],
+                "due_soon": [c.complaint_id for c in watch["due_soon"]]}
+
+    def mining_report(self) -> dict:
+        """The unhandled-intent mining pass over every stored
+        conversation — a report for the humans designing new
+        intents. It creates nothing."""
+        return mining.mine_unhandled_intents(self.store, self.policy)
 
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
