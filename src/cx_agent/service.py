@@ -11,11 +11,12 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import care_book, mining
+from . import attribution, care_book, mining
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import make_llm
-from .models import Conversation, Escalation, HandoffPacket, TurnResult
+from .models import (AuditEvent, Conversation, Escalation, HandoffPacket,
+                    TurnResult)
 from .retrieval import PolicyRetriever
 from .store import Store, make_store
 from .supervisor import Supervisor
@@ -156,6 +157,53 @@ class ConversationService:
         intents. It creates nothing."""
         return mining.mine_unhandled_intents(self.store, self.policy)
 
+    # -- failure attribution and the annotation queue ----------------------
+
+    def run_attribution(self) -> dict:
+        """The attribution pass: every conversation that has
+        closed gets its outcome + cause record, computed from
+        its audit trail. Conversations still open are left
+        alone."""
+        return attribution.run_attribution(self.store)
+
+    def attribute_conversation(self, conversation_id: str):
+        """Attribute one conversation — including one that
+        merely stopped, which the operator declares ended by
+        asking. Returns None when no such conversation exists."""
+        return attribution.attribute_conversation(self.store, conversation_id)
+
+    def list_attributions(self):
+        return self.store.list_attributions()
+
+    def attribution_report(self, days: int = 7) -> dict:
+        """Cause × desk counts over a window with the previous
+        window beside them, and the mining join: top unhandled
+        candidates with their members' attributed causes."""
+        return attribution.attribution_report(self.store, self.policy, days)
+
+    def annotation_queue(self) -> list[dict]:
+        """The review queue: escalated and unresolved
+        conversations in full, resolved ones by the deterministic
+        sample — each with its attribution and review state."""
+        return attribution.annotation_queue(self.store, self.policy)
+
+    def annotate(self, conversation_id: str, annotator: str,
+                 cause_correct: bool, corrected_cause: str | None = None,
+                 note: str = "", is_verdict: bool = False):
+        """Write one annotation. Raises ValueError with the rule
+        it broke — the API turns that into a 400."""
+        return attribution.annotate(
+            self.store, conversation_id, annotator, cause_correct,
+            corrected_cause, note, is_verdict)
+
+    def annotation_agreement(self) -> dict:
+        """Annotator agreement (simple rate + Cohen's kappa over
+        cause labels) and the disagreements awaiting a verdict."""
+        return attribution.annotation_agreement(self.store)
+
+    def list_annotations(self, conversation_id: str | None = None):
+        return self.store.list_annotations(conversation_id)
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)
@@ -171,7 +219,21 @@ class ConversationService:
                 identity_state=conv.identity_state.value,
                 status=conv.status, escalated=True,
                 escalation_reason="already_escalated")
-        result = self.supervisor.run_turn(conv, text)
+        try:
+            result = self.supervisor.run_turn(conv, text)
+        except Exception as exc:
+            # A crashed turn is evidence, not silence: the trail
+            # gets an internal-error event (failure attribution
+            # reads it as the system_error cause), the conversation
+            # is saved as far as it got, and the error still
+            # propagates — nothing here swallows it.
+            self.store.save_conversation(conv)
+            self.store.save_audit(AuditEvent(
+                conversation_id=conv.conversation_id, kind="system",
+                detail={"event": "internal_error",
+                        "error": f"{type(exc).__name__}: {exc}"},
+                turn=conv.turns))
+            raise
         self.store.save_conversation(conv)
         return result
 
