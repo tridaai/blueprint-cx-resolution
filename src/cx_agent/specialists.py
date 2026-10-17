@@ -16,10 +16,11 @@ lives in the supervisor (round 2), not here.
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
-from . import roaming_book
+from . import payments_book, roaming_book
 from .routing import classify_confirmation
 from .billing_book import (
     assess_dispute,
@@ -36,8 +37,10 @@ from .config import Policy
 from .money import fmt, money
 from .models import (
     ActionKind,
+    AuditEvent,
     Conversation,
     Finding,
+    PaymentArrangement,
     ProposedAction,
     SpecialistResult,
 )
@@ -1078,6 +1081,73 @@ def technical(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
 def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     lowered = text.lower()
     acct = _account(ctx, conv)
+    state = conv.specialist_state.setdefault("account", {})
+
+    # A broken arrangement is a human's case, decided before
+    # anything else this desk might say: the schedule was missed,
+    # the record says so, and the agent does not renegotiate it.
+    # The escalation carries the record — its id rides the audit
+    # trail, its facts ride the findings.
+    if acct is not None:
+        broken = payments_book.broken_arrangement(
+            ctx.store, acct.account_number)
+        if broken is not None:
+            summary = payments_book.arrangement_summary(broken)
+            ctx.store.save_audit(AuditEvent(
+                event_id=f"EVT-{uuid.uuid4().hex[:10]}",
+                conversation_id=conv.conversation_id, kind="payments",
+                detail={"event": "broken_arrangement_routed",
+                        "arrangement_id": broken.arrangement_id,
+                        "account_number": acct.account_number,
+                        "summary": summary},
+                turn=conv.turns))
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="broken_arrangement",
+                    text=(f"I can see {summary}. Once an arrangement "
+                          "breaks, it's handled by a person on our "
+                          "team — they can look at the whole picture "
+                          "and agree a way forward with you. I'm "
+                          "passing you over with the arrangement "
+                          "record attached, so you won't have to "
+                          "explain it again."))],
+                escalate_reason="broken_payment_arrangement",
+                escalate_queue="general",
+                progress=True)
+
+    # A HARD decline standing against the method on file ends any
+    # retry conversation before it starts: the desk refuses here,
+    # and execution refuses again if a proposal ever slips past.
+    block = (payments_book.hard_decline_block(ctx.store, acct)
+             if acct is not None else None)
+    if block is not None and any(w in lowered for w in
+                                 ("try", "again", "retry", "same card")):
+        return SpecialistResult(
+            specialist="account",
+            findings=[Finding(
+                topic="hard_decline_refusal",
+                text=(payments_book.diagnosis_text(block)
+                      + " I can't try that card again — a hard "
+                      "decline means it will never go through. The "
+                      "way forward is a new card: tell me the last "
+                      "four digits of a different card and I'll put "
+                      "it on the account, then we can pay with "
+                      "that instead."))],
+            citations=_cite(ctx, "payments",
+                            "declined payment retry new card"),
+            progress=True)
+
+    # A failed autopay run is the first thing a payments contact
+    # hears about: its notice summary leads, verbatim, on the
+    # branches where the customer is asking after their money.
+    failure = (payments_book.latest_autopay_failure(
+        ctx.store, acct.account_number) if acct is not None else None)
+    failure_lead: list[str] = []
+    if failure is not None:
+        attempt, notice = failure
+        failure_lead = [notice.summary if notice is not None
+                        else payments_book.diagnosis_text(attempt)]
 
     if any(w in lowered for w in ("card", "payment method", "direct debit")):
         from .identity import is_verified
@@ -1122,22 +1192,56 @@ def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
                                   "installment", "behind")):
         if acct is None:
             return _needs_identity("account", _IDENTITY_ASK)
+        active = payments_book.active_arrangement(
+            ctx.store, acct.account_number)
+        if active is not None:
+            # One arrangement at a time: the answer is its state,
+            # never a second schedule written over it.
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="arrangement_active",
+                    text=(f"You already have an arrangement running: "
+                          f"{payments_book.arrangement_summary(active)}. "
+                          "A second one can't start while this one is "
+                          "active — the payments go toward these "
+                          "instalments first."))],
+                citations=_cite(ctx, "payments",
+                                "payment arrangement split balance instalments"),
+                progress=True)
         balance = acct.balance_due
-        if balance >= Decimal("100"):
-            each = (balance / 3).quantize(Decimal("0.01"))
+        if balance >= ctx.policy.arrangement_min_balance:
+            installments = payments_book.plan_installments(
+                balance, ctx.policy)
+            schedule = PaymentArrangement(
+                arrangement_id="", account_number=acct.account_number,
+                total=balance, installments=installments)
+            first = installments[0]
             return SpecialistResult(
                 specialist="account",
                 findings=[Finding(
                     topic="arrangement",
-                    text=(f"Your balance is {fmt(balance)}. Under the payment "
-                          f"arrangement policy you can split it into 3 equal "
-                          f"monthly instalments of {fmt(each)}, with no fee."))],
+                    text=(f"Your balance is {fmt(balance)}. Under the "
+                          f"payment arrangement policy you can split "
+                          f"it into "
+                          f"{payments_book.schedule_text(schedule)}, "
+                          f"with no fee. The first instalment falls "
+                          f"due on {first.due_date}."))],
                 proposed_action=ProposedAction(
                     kind=ActionKind.PAYMENT_ARRANGEMENT,
-                    summary=f"split your {fmt(balance)} balance into 3 monthly instalments of {fmt(each)}",
-                    payload={"instalments": 3, "each": str(each)},
+                    summary=(f"split your {fmt(balance)} balance into "
+                             f"{payments_book.schedule_text(schedule)}"),
+                    payload={
+                        "installments": [
+                            {"number": i.number, "amount": str(i.amount),
+                             "due_date": i.due_date}
+                            for i in installments],
+                        "instalments": len(installments),
+                        "each": str(first.amount)},
                     amount=balance,
-                    basis="Balance ≥ $100, account not in collections (POL-PAY-01)."),
+                    basis=("Balance at or over the arrangement "
+                           "minimum, no arrangement active "
+                           "(POL-PAY-01).")),
                 citations=_cite(ctx, "payments", "payment arrangement split balance instalments"),
                 progress=True)
         return SpecialistResult(
@@ -1145,20 +1249,237 @@ def account(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             findings=[Finding(
                 topic="arrangement_small",
                 text=(f"Your balance is {fmt(balance)}. Arrangements start at "
-                      "a $100 balance, so this one is due as a single payment "
+                      f"a {fmt(ctx.policy.arrangement_min_balance)} balance, "
+                      "so this one is due as a single payment "
                       f"by the bill's due date."))],
             citations=_cite(ctx, "payments", "payment arrangement split balance instalments"),
             progress=True)
+
+    if any(w in lowered for w in ("pay my", "pay the", "make a payment",
+                                  "payment again", "pay in full",
+                                  "pay it off", "retry", "try again")) \
+            or state.get("await_retry"):
+        state.pop("await_retry", None)
+        if acct is None:
+            return _needs_identity("account", _IDENTITY_ASK)
+        if acct.balance_due <= 0:
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="nothing_due",
+                    text="There's nothing due on your account right "
+                         "now — the balance is $0.00.")],
+                progress=True, resolved=True)
+        if block is not None:
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="hard_decline_refusal",
+                    text=(payments_book.diagnosis_text(block)
+                          + " I won't run that card again — it can't "
+                          "go through. Tell me the last four digits "
+                          "of a new card and we'll pay with that "
+                          "instead."))],
+                citations=_cite(ctx, "payments",
+                                "declined payment retry new card"),
+                progress=True)
+        findings = []
+        last = payments_book.last_attempt(ctx.store, acct.account_number)
+        if last is not None and last.outcome == "declined":
+            findings.append(Finding(
+                topic="diagnosis",
+                text=payments_book.diagnosis_text(last)))
+        findings.append(Finding(
+            topic="pay",
+            text=(f"Your balance is {fmt(acct.balance_due)}. I can "
+                  f"take that now from the card ending "
+                  f"{acct.payment_method_last4} on your account.")))
+        return SpecialistResult(
+            specialist="account",
+            findings=findings,
+            proposed_action=ProposedAction(
+                kind=ActionKind.TAKE_PAYMENT,
+                summary=(f"pay your balance of {fmt(acct.balance_due)} "
+                         f"with the card ending "
+                         f"{acct.payment_method_last4}"),
+                payload={"amount": str(acct.balance_due),
+                         "method_last4": acct.payment_method_last4 or ""},
+                amount=acct.balance_due,
+                basis="Customer asked to pay; the charge goes to "
+                      "the method on file (POL-PAY-03)."),
+            citations=_cite(ctx, "payments", "pay balance card on file"),
+            must_include=failure_lead,
+            progress=True)
+
+    if "refund" in lowered:
+        if acct is None:
+            return _needs_identity("account", _IDENTITY_ASK)
+        credit = acct.credit_balance
+        if credit <= 0:
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="refund_none",
+                    text=("There's no credit balance on your account "
+                          "— nothing is owed back right now. If a "
+                          "payment has left your bank twice, the "
+                          "second one may still be settling; what "
+                          f"shows here is a balance of "
+                          f"{fmt(acct.balance_due)} due."))],
+                citations=_cite(ctx, "payments", "refund overpayment"),
+                progress=True)
+        digits = [d for d in re.findall(r"(?<!\d)(\d{4})(?!\d)", text)
+                  if d != acct.payment_method_last4]
+        foreign = bool(digits) or any(w in lowered for w in (
+            "bank account", "bank transfer", "cheque", "another card",
+            "different card", "new card", "cash"))
+        if foreign:
+            named = ("a bank account"
+                     if any(w in lowered for w in
+                            ("bank account", "bank transfer"))
+                     else "another card" if digits or "card" in lowered
+                     else "a different destination")
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="refund_destination_refused",
+                    text=(f"I can't send a refund to {named}. "
+                          "Refunds go back to the payment method on "
+                          f"your account — the card ending "
+                          f"{acct.payment_method_last4} — and nowhere "
+                          "else; that's a fraud-protection rule and "
+                          "it applies every time. The amount owed "
+                          f"back to you is {fmt(credit)}. Say the "
+                          "word and I'll send it to the card ending "
+                          f"{acct.payment_method_last4}."))],
+                citations=_cite(ctx, "payments",
+                                "refund payment method on file fraud"),
+                progress=True)
+        return SpecialistResult(
+            specialist="account",
+            findings=[Finding(
+                topic="refund",
+                text=(f"You're owed {fmt(credit)} back — it sits on "
+                      "your account as a credit balance. Refunds go "
+                      f"to the card ending {acct.payment_method_last4} "
+                      "on your account."))],
+            proposed_action=ProposedAction(
+                kind=ActionKind.REFUND_PAYMENT,
+                summary=(f"refund {fmt(credit)} to the card ending "
+                         f"{acct.payment_method_last4}"),
+                payload={"amount": str(credit),
+                         "method_last4": acct.payment_method_last4 or ""},
+                amount=credit,
+                basis="Credit balance on the account; refunds go "
+                      "to the method on file only (POL-PAY-03)."),
+            citations=_cite(ctx, "payments",
+                            "refund payment method on file fraud"),
+            progress=True)
+
+    if any(w in lowered for w in ("autopay", "auto pay",
+                                  "automatic payment")):
+        from .identity import is_verified
+        if not is_verified(conv):
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="verify_first",
+                    text=("Changing autopay needs a fully verified "
+                          "identity first — the account check plus "
+                          "the one-time code. Let's do that now."))],
+                needs_verification=True,
+                citations=_cite(ctx, "payments", "autopay automatic payment"),
+                progress=True)
+        if acct is None:
+            return _needs_identity("account", _IDENTITY_ASK)
+        if any(w in lowered for w in ("turn off", "switch off", "cancel",
+                                      "disable", "stop autopay")):
+            if not acct.autopay_enabled:
+                return SpecialistResult(
+                    specialist="account",
+                    findings=[Finding(
+                        topic="autopay_state",
+                        text="Autopay is already off on your account.")],
+                    progress=True, resolved=True)
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="autopay_off",
+                    text=("Autopay is on at the moment — each bill "
+                          "is taken from the card ending "
+                          f"{acct.payment_method_last4}."))],
+                proposed_action=ProposedAction(
+                    kind=ActionKind.SET_AUTOPAY,
+                    summary="turn autopay off",
+                    payload={"enabled": False},
+                    basis="Customer asked to stop automatic "
+                          "payments (POL-PAY-03)."),
+                citations=_cite(ctx, "payments", "autopay automatic payment"),
+                must_include=failure_lead,
+                progress=True)
+        if any(w in lowered for w in ("turn on", "switch on", "set up",
+                                      "enable", "activate", "start")):
+            if acct.autopay_enabled:
+                return SpecialistResult(
+                    specialist="account",
+                    findings=[Finding(
+                        topic="autopay_state",
+                        text=("Autopay is already on — each bill is "
+                              "taken from the card ending "
+                              f"{acct.payment_method_last4}."))],
+                    progress=True, resolved=True)
+            return SpecialistResult(
+                specialist="account",
+                findings=[Finding(
+                    topic="autopay_on",
+                    text=("With autopay on, each bill is taken "
+                          "automatically from the card ending "
+                          f"{acct.payment_method_last4} when it "
+                          "lands — no need to remember due dates."))],
+                proposed_action=ProposedAction(
+                    kind=ActionKind.SET_AUTOPAY,
+                    summary=(f"turn autopay on, paying each bill "
+                             f"from the card ending "
+                             f"{acct.payment_method_last4}"),
+                    payload={"enabled": True},
+                    basis="Customer asked for automatic payments "
+                          "from the method on file (POL-PAY-03)."),
+                citations=_cite(ctx, "payments", "autopay automatic payment"),
+                must_include=failure_lead,
+                progress=True)
+        state_text = ("on — each bill is taken from the card ending "
+                      f"{acct.payment_method_last4}"
+                      if acct.autopay_enabled else "off")
+        return SpecialistResult(
+            specialist="account",
+            findings=[Finding(
+                topic="autopay_state",
+                text=f"Autopay is {state_text} on your account.")],
+            must_include=failure_lead,
+            progress=True, resolved=True)
 
     if acct is None:
         return _needs_identity("account", _IDENTITY_ASK)
     bill = ctx.store.get_bill_for_account(conv.account_number)
     due = bill.due if bill else "the date on your bill"
+    findings = [Finding(
+        topic="balance",
+        text=f"Your current balance is {fmt(acct.balance_due)}, due {due}.")]
+    active = payments_book.active_arrangement(ctx.store,
+                                              acct.account_number)
+    if active is not None:
+        findings.append(Finding(
+            topic="arrangement_state",
+            text=f"You have {payments_book.arrangement_summary(active)}."))
+    if acct.autopay_enabled:
+        findings.append(Finding(
+            topic="autopay_state",
+            text=("Autopay is on — this balance will be taken from "
+                  f"the card ending {acct.payment_method_last4}.")))
     return SpecialistResult(
         specialist="account",
-        findings=[Finding(
-            topic="balance",
-            text=f"Your current balance is {fmt(acct.balance_due)}, due {due}.")],
+        findings=findings,
+        must_include=failure_lead,
         progress=True, resolved=True)
 
 
