@@ -174,6 +174,50 @@ class ActionRecord(BaseModel):
     status: str = "proposed"  # proposed | executed | declined | blocked | superseded
     block_reason: str = ""
     turn: int = 0
+    # The account the action belongs to and the day it was raised.
+    # The credit-history rules read across conversations by account,
+    # over a trailing window of days — neither is derivable from the
+    # conversation alone, so both ride the record itself.
+    account_number: str = ""
+    created_date: str = ""  # ISO date
+
+
+class DisputeLine(BaseModel):
+    """One disputed charge, decided on its own evidence."""
+
+    charge_id: str
+    description: str
+    amount: Decimal  # the charge as billed
+    disputed_amount: Decimal  # the part in dispute (the excess on a wrong rate)
+    evidence: str = ""  # what the bill itself proves, when it proves anything
+    decision: str = "credited"  # credited | declined | escalated
+    reason: str = ""  # plain-words reason, set when the line is declined
+
+
+class DisputeCase(BaseModel):
+    """A dispute as a record of its own — not a by-product of a chat.
+
+    Opened when the billing desk assesses a dispute; each line is
+    decided on its own evidence, so a case can end in a full credit,
+    a partial credit (some lines credited, some declined with the
+    reason in plain words), a decline, or an escalation when the
+    evidenced total is above the agent's cap. The case outlives the
+    conversation and is what the disputes view and the audit trail
+    point at.
+    """
+
+    case_id: str
+    conversation_id: str
+    account_number: str
+    bill_id: str
+    state: str = "opened"  # opened | decided_credit | decided_partial
+    #                        | declined_with_reason | escalated_above_cap
+    lines: list[DisputeLine] = Field(default_factory=list)
+    credit_applied: Decimal = Decimal("0")
+    decision_basis: str = ""
+    goodwill_refused_reason: str = ""
+    created_date: str = ""  # ISO date
+    updated_date: str = ""
 
 
 class Finding(BaseModel):

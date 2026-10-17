@@ -22,6 +22,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from .clock import today
 from .config import Policy
 from .identity import is_verified
 from .models import (
@@ -46,6 +47,8 @@ def new_action_record(conv: Conversation, proposal: ProposedAction,
         basis=proposal.basis,
         status=status,
         turn=conv.turns,
+        account_number=conv.account_number or "",
+        created_date=today().isoformat(),
     )
 
 
