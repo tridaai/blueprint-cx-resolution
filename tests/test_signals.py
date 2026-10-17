@@ -272,3 +272,53 @@ def test_signal_audit_events_carry_the_intervention_trail(service):
     assert [(e.detail["kind"], e.detail["outcome"]) for e in events] == [
         ("frustration_human_offer", "offered"),
         ("frustration_human_offer", "accepted")]
+
+
+# -- the handoff packet's signal summary ---------------------------------
+
+
+def test_packet_carries_the_signal_summary(service):
+    cid, _r3, _r4 = _identity_path(service)
+    _say(service, cid, "Yes please.")
+    packet = service.store.list_escalations()[-1].packet
+    sig = packet.signals
+    assert sig["turns"] == 5
+    # 5 turns + 2 identity attempts, no reroutes, no repeated asks.
+    assert sig["effort_score"] == 7
+    assert sig["effort"] == {"turns": 5, "identity_attempts": 2,
+                             "reroutes": 0, "repeats": 0}
+    assert sig["frustration_trend"] == "calm"
+    assert sig["frustration_latest"] == 0
+    assert sig["interventions"] == [
+        {"kind": "identity_effort_human_offer", "outcome": "accepted"}]
+    assert sig["second_forms_used"] == []
+    assert any("Customer experience" in item
+               for item in packet.open_items)
+
+
+def test_packet_summary_rides_a_classic_escalation_too(service):
+    conv = service.start_conversation()
+    cid = conv.conversation_id
+    _say(service, cid, "Let me talk to a real person")
+    r2 = _say(service, cid, "No, I said get me a human")
+    assert r2.escalated
+    assert r2.escalation_reason == "customer_requested_human"
+    packet = service.store.list_escalations()[-1].packet
+    assert packet.signals["turns"] == 2
+    assert packet.signals["effort_score"] == 2
+    assert packet.signals["interventions"] == []
+    assert packet.signals["second_forms_used"] == []
+
+
+def test_packet_summary_names_the_second_forms_used(service):
+    conv = service.start_conversation()
+    cid = conv.conversation_id
+    _say(service, cid, "What time do your stores open on Saturday?")
+    _say(service, cid, "I don't understand - what do you mean?")
+    _say(service, cid, "Let me talk to a real person")
+    r4 = _say(service, cid, "No, I said get me a human")
+    assert r4.escalated
+    packet = service.store.list_escalations()[-1].packet
+    assert packet.signals["second_forms_used"] == ["POL-CARE-01"]
+    assert packet.signals["interventions"] == [
+        {"kind": "second_form:POL-CARE-01", "outcome": "applied"}]

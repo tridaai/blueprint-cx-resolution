@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import signals as signals_mod
 from .config import Policy
 from .models import Conversation, HandoffPacket
 from .screening import Screening
@@ -105,6 +106,22 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         f"{conv.turns} turn(s); intent={conv.intent.value}; "
         f"last customer message: {last_customer[:160]}"
     )
+    # The customer's experience rides the packet too (round 11):
+    # the effort the conversation cost them, how their frustration
+    # moved, and which signal interventions were already tried and
+    # how they were answered — computed live from the record, so
+    # it is true at the moment of handoff. When the experience
+    # itself needs the human's attention, an open item says so.
+    sig_summary = signals_mod.packet_summary(store, conv)
+    answered = [i for i in sig_summary["interventions"]
+                if i["outcome"] in ("accepted", "declined", "lapsed")]
+    if sig_summary["frustration_trend"] == "rising" or answered:
+        open_items.append(
+            f"Customer experience: effort {sig_summary['effort_score']} "
+            f"over {conv.turns} turn(s), frustration "
+            f"{sig_summary['frustration_trend']}; "
+            f"{len(sig_summary['interventions'])} signal intervention(s) "
+            "already tried — see the packet's signal summary.")
     return HandoffPacket(
         conversation_id=conv.conversation_id,
         queue=queue,
@@ -117,4 +134,5 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         attempts=attempts,
         actions_taken=taken,
         open_items=open_items,
+        signals=sig_summary,
     )
