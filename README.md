@@ -278,8 +278,8 @@ Once a day the pieces above are composed into one stored
 **daily quality digest** (`cx-agent daily-quality --date
 YYYY-MM-DD`, `POST /quality/run`, the console's digest panel):
 the day's closed conversations — volume by entry desk and
-outcome, the cause mix with designed escalations counted
-apart, the signal aggregates (average effort, how often
+outcome, the conversations counted by channel, the cause mix
+with designed escalations counted apart, the signal aggregates (average effort, how often
 frustration rose, what the offers of a person did), the
 complaint book's SLA state at day end, the promises ledger's
 state at day end with broken promises listed in full, the
@@ -510,14 +510,39 @@ code, never instructions to a model.
 - **Screening** — customer text is screened for prompt injection
   before any model sees it; attempts are audit-logged and answered
   as ordinary service.
+- **Channels** — a conversation belongs to a channel, recorded
+  at creation: `web_chat`, `email` or `voice_transcript`. The
+  channel governs **presentation only** — identity, screening,
+  policy, money and escalation read the customer's words exactly
+  the same way on every channel, and the eval gate plays one
+  dispute down all three and grades identical state. What the
+  channel changes is the rendering, applied in code after the
+  reply is composed: email goes out as plain text (markdown
+  stripped deterministically) under a subject line derived from
+  the conversation's governed state — its desk and its status,
+  never the customer's words — and a length cap that truncates
+  whole sentences only, never a figure, a guaranteed line or
+  the Sources line (the cap yields to those, in that order);
+  the voice channel gets a spoken-form view — figures spelled
+  for speech, URLs and the Sources line replaced by a spoken
+  pointer to the customer's account messages, sentences split
+  at clause boundaries under a word cap — while the stored
+  reply keeps its digits verbatim. Inbound, the envelope comes
+  off by rule: an email's body is the message (quoted history
+  dropped) and its subject is screened on arrival, audit-logged
+  and filed on the record — context, never an instruction; a
+  transcript keeps the customer-side lines with the diarisation
+  stripped. The daily digest counts the day's conversations by
+  channel.
 
 ## The eval gate
 
 CX agents fail in behavior, not in unit tests, so the gate is
-behavioral: **147 scripted multi-turn conversations** played
+behavioral: **163 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care, attribution, signals, retention, continuity. Ninety-five are hand-written persona trajectories
+identity, care, attribution, signals, retention, continuity,
+handoffs, costs, channel. One hundred and seventeen are hand-written trajectories
 (the refund seeker, the human-demander, the fragment writer, the
 AI skeptic, the confused elder, non-native phrasing). Thirty-five
 more are the **persona matrix**: seven difficult-customer
@@ -533,7 +558,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1462/1462 assertions, 1125/1125 zero-tolerance. The
+the tree: 1530/1530 assertions, 1193/1193 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -543,7 +568,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (376 tests) covers the deterministic core —
+The pytest suite (396 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, the retention flow (the case record, the one
@@ -559,7 +584,11 @@ shared clock, the digest naming both, the transfer line held
 to the packet), cost & latency discipline (the call records
 on the audit trail, the fold's reconciliation, both caps
 closing the next turn, the retry-once timeout closing the
-turn to a person), store
+turn to a person), channel discipline (the envelopes parsed
+by rule, the subject screened and filed, the email rendering's
+plain text and its protected cut, the spoken form's spelled
+figures and pointer line, the same dispute landing identically
+on all three channels), store
 conformance across the SQLite and in-memory profiles (the
 PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
@@ -628,6 +657,11 @@ src/cx_agent/
                    model-call records — per-conversation usage
                    (what the budget reads), the operator report
                    per desk and per day, the digest's section
+  channels.py      channel discipline: the inbound envelope
+                   parsers (email subject/body, transcript
+                   diarisation), the per-channel renderings
+                   (email plain text + governed subject + cap,
+                   the spoken-form view), presentation only
   prompts.py       the prompt registry: every governed text as
                    versioned data (compose + intent prompts, the
                    explanation forms, the policy corpus), the
@@ -650,7 +684,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (110 trajectories) + personas.py
+evals/             scenarios.jsonl (117 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite
