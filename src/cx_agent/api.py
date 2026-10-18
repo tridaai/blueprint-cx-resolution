@@ -468,6 +468,16 @@ def signal_report() -> dict:
     return service.signal_report()
 
 
+@app.get("/costs/report", dependencies=[Depends(require_key)])
+def cost_report() -> dict:
+    """Cost & latency over stored conversations: model calls by
+    kind, tokens split by basis (measured vs estimated), mean
+    and p95 latency — overall, per desk, per day — folded from
+    the call records on the audit trails, with the budget and
+    timeout closings and the governed caps named."""
+    return service.cost_report()
+
+
 @app.post("/quality/run", dependencies=[Depends(require_key)])
 def run_daily_quality(date: str | None = None) -> dict:
     """Run the daily quality pass for a date (default: today, by

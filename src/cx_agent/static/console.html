@@ -139,6 +139,8 @@
     </div>
     <h2 style="margin-top:22px">Conversation signals</h2>
     <div id="signals"><p class="empty">No signal records yet. Every conversation turn records its signals — frustration, the effort it cost the customer, progress, confusion — and the interventions they fired.</p></div>
+    <h2 style="margin-top:22px">Model cost &amp; latency</h2>
+    <div id="costs"><p class="empty">No model calls recorded yet. Every model call the supervisor makes is a record — its kind (decision or advisory), its tokens (measured where the provider reported them, estimated otherwise), its outcome and its latency — and this report folds those records. A conversation that spends its budget, or whose model times out twice, closes to a person; the closings count here.</p></div>
     <h2 style="margin-top:22px">Daily quality digest</h2>
     <div id="quality"><p class="empty">No digest yet. The daily pass composes one day's closed conversations — volume, causes, signals, the complaint book at day end, mining candidates, and a regression spot-check against the committed eval baseline — into a stored snapshot. It informs the team; it triggers nothing.</p></div>
     <button class="ghost" onclick="runQuality()">Run today's quality pass</button>
@@ -668,6 +670,29 @@ async function refresh() {
       ' · escalated only ' + cells.not_rising_and_escalated +
       ' · neither ' + cells.not_rising_not_escalated + '.</p>';
     sbox.innerHTML = html;
+  }
+  const cst = await api("/costs/report");
+  const cbox = document.getElementById("costs");
+  if (!cst.overall.calls) {
+    cbox.innerHTML = '<p class="empty">No model calls recorded yet. Every model call the supervisor makes is a record — its kind (decision or advisory), its tokens (measured where the provider reported them, estimated otherwise), its outcome and its latency — and this report folds those records.</p>';
+  } else {
+    const o = cst.overall;
+    let html = '<p class="empty">' + o.calls + ' model call(s) · ' + o.tokens +
+      ' tokens (estimated ' + o.tokens_estimated + ' · measured ' + o.tokens_measured +
+      ') · latency mean ' + o.mean_latency_ms + ' ms · p95 ' + o.p95_latency_ms + ' ms.</p>';
+    const cdesks = Object.keys(cst.by_desk);
+    if (cdesks.length) {
+      html += '<table class="attr"><tr><th>Desk</th><th>Calls</th><th>Tokens</th><th>p95 latency</th></tr>' +
+        cdesks.map(d => "<tr><td>" + d + "</td><td>" + cst.by_desk[d].calls + "</td><td>" +
+          cst.by_desk[d].tokens + "</td><td>" + cst.by_desk[d].p95_latency_ms + " ms</td></tr>").join("") + "</table>";
+    }
+    html += '<p class="empty">Closings: ' + cst.budget_exhaustions + ' on budget · ' +
+      cst.timeout_escalations + ' on timeout · timed-out calls ' + o.timeouts +
+      ' · errored calls ' + o.errors + '. Caps: ' +
+      cst.caps.max_decision_calls_per_conversation + ' decision calls / ' +
+      cst.caps.max_estimated_tokens_per_conversation + ' tokens per conversation, ' +
+      cst.caps.model_call_timeout_seconds + 's per call.</p>';
+    cbox.innerHTML = html;
   }
   const q = await api("/quality/digests");
   const qbox = document.getElementById("quality");

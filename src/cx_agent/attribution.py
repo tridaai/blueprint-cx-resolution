@@ -29,9 +29,11 @@ specific fired first):
    step refused, a step failed, a field visit required), or a
    no-progress escalation with a walk in flight.
 5. Designed escalations — threat, fraud, legal, vulnerability,
-   the customer's second ask for a human. These are the system
-   working as designed, not failing: cause is None and the rule
-   says so (`escalated_by_design:<reason>`).
+   the customer's second ask for a human, a conversation budget
+   spent (round 18), a model call that timed out twice
+   (round 18). These are the system working as designed, not
+   failing: cause is None and the rule says so
+   (`escalated_by_design:<reason>`).
 6. `identity_friction` (soft) — the conversation ended still
    waiting at the verification step: verification abandoned.
 7. `routing_error` — rerouted two or more times and nothing
@@ -99,12 +101,17 @@ OUTCOMES = (
 
 # Escalation reasons that are the design working, not a failure:
 # the rules demanded a human whatever the desks could have done.
+# Round 18 adds the cost closings: a budget spent and a model
+# that timed out twice both hand the conversation to a person
+# by design — the discipline working, not the agent failing.
 DESIGNED_ESCALATION_REASONS = {
     "safety_threat",
     "fraud_report",
     "legal_matter",
     "vulnerable_customer",
     "customer_requested_human",
+    "budget_exhausted",
+    "model_timeout",
 }
 
 # Escalation reasons a policy rule owns outright: the outcome was

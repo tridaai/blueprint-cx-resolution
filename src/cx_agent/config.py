@@ -137,6 +137,20 @@ class Policy:
     # fell on the floor is visible. Nothing acts on it: no
     # reassignment, no alert — a person reads and decides.
     handoff_acceptance_days: int = 1
+    # Cost & latency discipline (round 18): the conversation's
+    # budget, read from its own model-call records at the START
+    # of a turn — so the turn that crosses a cap completes, and
+    # the NEXT turn closes the conversation to a person with
+    # the reason `budget_exhausted`, a handoff packet graded as
+    # usual. The token cap reads the recorded token total:
+    # measured where the provider reported usage, the
+    # deterministic estimate everywhere else (the offline
+    # backend always estimates). And the per-call timeout the
+    # model boundary enforces, with its one retry: a second
+    # timeout closes the turn the same way (`model_timeout`).
+    max_decision_calls_per_conversation: int = 40
+    max_estimated_tokens_per_conversation: int = 100_000
+    model_call_timeout_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -200,6 +214,15 @@ class Policy:
                 "CX_DAILY_MINING_TOP", base.daily_mining_top),
             handoff_acceptance_days=num(
                 "CX_HANDOFF_ACCEPTANCE_DAYS", base.handoff_acceptance_days),
+            max_decision_calls_per_conversation=num(
+                "CX_MAX_DECISION_CALLS_PER_CONVERSATION",
+                base.max_decision_calls_per_conversation),
+            max_estimated_tokens_per_conversation=num(
+                "CX_MAX_ESTIMATED_TOKENS_PER_CONVERSATION",
+                base.max_estimated_tokens_per_conversation),
+            model_call_timeout_seconds=num(
+                "CX_MODEL_CALL_TIMEOUT_SECONDS",
+                base.model_call_timeout_seconds),
         )
 
 

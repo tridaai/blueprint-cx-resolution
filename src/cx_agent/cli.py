@@ -17,6 +17,10 @@
     cx-agent annotation-queue the human review queue + agreement
     cx-agent signals         the conversation-signal report (effort,
                              frustration, interventions)
+    cx-agent costs           the cost & latency report: model calls,
+                             tokens by basis, latency — overall, per
+                             desk, per day — and the budget/timeout
+                             closings under the governed caps
     cx-agent daily-quality   run the daily quality pass and print
         [--date YYYY-MM-DD]  its digest (default date: today)
     cx-agent quality-trend   headline metrics across stored digests
@@ -156,6 +160,34 @@ def main(argv: list[str] | None = None) -> int:
               f"rising only {cells['rising_not_escalated']}, "
               f"escalated only {cells['not_rising_and_escalated']}, "
               f"neither {cells['not_rising_not_escalated']}")
+        return 0
+    if cmd == "costs":
+        report = service.cost_report()
+        o = report["overall"]
+        caps = report["caps"]
+        print(f"Model cost & latency — {o['calls']} call(s), "
+              f"{o['tokens']} token(s) (estimated "
+              f"{o['tokens_estimated']}, measured "
+              f"{o['tokens_measured']})")
+        print(f"  decision {o['decision_calls']} · advisory "
+              f"{o['advisory_calls']} · latency mean "
+              f"{o['mean_latency_ms']} ms · p95 "
+              f"{o['p95_latency_ms']} ms · timeouts {o['timeouts']} "
+              f"· errors {o['errors']}")
+        for desk, row in report["by_desk"].items():
+            print(f"    desk {desk:<10} calls {row['calls']}  "
+                  f"tokens {row['tokens']}  p95 "
+                  f"{row['p95_latency_ms']} ms")
+        for day, row in report["by_day"].items():
+            print(f"    day {day}  calls {row['calls']}  "
+                  f"tokens {row['tokens']}")
+        print(f"  closings: {report['budget_exhaustions']} on "
+              f"budget, {report['timeout_escalations']} on timeout "
+              f"· caps: {caps['max_decision_calls_per_conversation']} "
+              f"decision calls / "
+              f"{caps['max_estimated_tokens_per_conversation']} "
+              f"tokens per conversation, "
+              f"{caps['model_call_timeout_seconds']}s per call")
         return 0
     if cmd == "annotation-queue":
         for row in service.annotation_queue():

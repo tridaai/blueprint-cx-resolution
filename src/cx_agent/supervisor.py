@@ -28,6 +28,7 @@ from langgraph.graph import END, StateGraph
 from . import actions as action_mod
 from . import billing_book
 from . import continuity
+from . import costs as costs_mod
 from . import incidents as incidents_mod
 from . import payments_book
 from . import retention_book
@@ -39,7 +40,7 @@ from . import procedures
 from . import signals as signals_mod
 from .clock import today
 from .config import Policy
-from .llm import DraftContext
+from .llm import DraftContext, ModelTimeoutError
 from .prompts import (
     COMPOSE_SYSTEM_ID,
     COMPOSE_USER_ID,
@@ -237,6 +238,32 @@ class Supervisor:
         decision = esc_mod.evaluate(
             conv, scr, self.policy,
             account_vulnerable=bool(customer and customer.vulnerable))
+        if not decision.escalate:
+            # Cost discipline (round 18): the conversation's
+            # budget, folded from its own model-call records.
+            # The check reads at the START of a turn, so the
+            # turn that crossed a cap has already completed in
+            # full; this turn spends nothing more and closes
+            # the conversation to a person — a designed
+            # escalation, with the observed usage on the audit
+            # trail beside the caps it crossed.
+            usage = costs_mod.conversation_usage(
+                self.store, conv.conversation_id)
+            if usage["decision_calls"] >= \
+                    self.policy.max_decision_calls_per_conversation \
+                    or usage["tokens"] >= \
+                    self.policy.max_estimated_tokens_per_conversation:
+                self._audit(conv, "budget", {
+                    "event": "budget_exhausted",
+                    "decision_calls": usage["decision_calls"],
+                    "tokens": usage["tokens"],
+                    "max_decision_calls":
+                        self.policy.max_decision_calls_per_conversation,
+                    "max_tokens":
+                        self.policy.max_estimated_tokens_per_conversation,
+                    "turn": conv.turns})
+                decision = esc_mod.EscalationDecision(
+                    True, "budget_exhausted", "general")
         state["decision"] = decision
         state["first_human_ask"] = bool(
             scr.asks_for_human and conv.human_requests == 1 and not decision.escalate)
@@ -1257,15 +1284,41 @@ class Supervisor:
         # from the packet itself (round 17): an element the
         # packet lacks is never claimed, so an incomplete
         # handoff produces a shorter line, not a false one.
+        # A budget closing (round 18) leads with its own plain
+        # fact first: the automated help is spent, and a person
+        # picks the conversation up from here.
+        lead = ""
+        if decision.reason == "budget_exhausted":
+            lead = ("This conversation has used the amount of "
+                    "automated help I can give it, so a person "
+                    "will pick it up from here. ")
         state["reply"] = (
-            f"{prefix}I'm transferring you to {_QUEUE_LABEL.get(decision.queue, 'a specialist')} "
+            f"{lead}{prefix}I'm transferring you to {_QUEUE_LABEL.get(decision.queue, 'a specialist')} "
             f"now. Your reference is {esc.escalation_id}. "
             f"{handoffs.continuity_line(packet)}")
         return state
 
+    def _drain_calls(self, conv: Conversation) -> None:
+        """Write the turn's model-call records onto the audit
+        trail (round 18): the boundary's ledger, drained. Each
+        record gains the day (the shared clock) and the desk
+        that owned the turn, so the cost report can fold by
+        both. A drafter with no ledger — a test double — has
+        nothing to drain; the records, once written, are the
+        only accounting there is: budgets and reports fold
+        them, and no counter anywhere keeps a second copy."""
+        drain = getattr(self.llm, "drain_calls", None)
+        if drain is None:
+            return
+        for entry in drain():
+            self._audit(conv, "model_call", {
+                **entry, "date": today().isoformat(),
+                "desk": conv.intent.value})
+
     # -- finalize ----------------------------------------------------------------------
     def _finalize(self, state: TurnState) -> TurnState:
         conv = state["conv"]
+        self._drain_calls(conv)
         state["turn_result"] = TurnResult(
             conversation_id=conv.conversation_id,
             reply=state.get("reply", ""),
@@ -1316,7 +1369,22 @@ class Supervisor:
         conv.messages.append(Message(role="customer", text=text,
                                      turn=conv.turns + 1))
         state: TurnState = {"conv": conv, "text": text}
-        out = self.graph.invoke(state)
+        try:
+            out = self.graph.invoke(state)
+        except ModelTimeoutError:
+            # Latency discipline (round 18): the boundary has
+            # already retried the call once; a second timeout
+            # closes the turn to a person through the ordinary
+            # escalation machinery — packet, completeness grade,
+            # reference — rather than composing an answer out of
+            # a call that never answered. Finalize still runs,
+            # so the timed-out attempts land on the audit trail
+            # with the turn's other records.
+            state["decision"] = esc_mod.EscalationDecision(
+                True, "model_timeout", "general")
+            state.setdefault("result", SpecialistResult(
+                specialist="supervisor"))
+            out = self._finalize(self._escalate(state))
         result: TurnResult = out["turn_result"]
         conv.messages.append(Message(role="agent", text=result.reply,
                                      turn=conv.turns))

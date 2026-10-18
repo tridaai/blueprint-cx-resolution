@@ -716,6 +716,9 @@ class DailyDigest(BaseModel):
     handoffs: dict = {}  # handoff quality (round 17): the day's
     #                      incomplete packets with their gaps named,
     #                      and the book's unaccepted, overdue queue
+    costs: dict = {}  # cost & latency (round 18): the day's model
+    #                   calls folded from their records — calls by
+    #                   kind, tokens by basis, latency, closings
     spot_check: dict = {}  # the regression spot-check's findings
 
 

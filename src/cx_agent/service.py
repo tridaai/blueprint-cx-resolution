@@ -39,6 +39,11 @@ class ConversationService:
         self.prompts = PromptRegistry(self.store)
         if isinstance(self.llm, LiveLLM):
             self.llm.prompts = self.prompts
+            # The governed per-call timeout (round 18) is a
+            # Policy value; the boundary enforces it — and its
+            # one retry — on every provider call it makes.
+            self.llm.timeout_seconds = float(
+                self.policy.model_call_timeout_seconds)
         self.retriever = PolicyRetriever(self.store)
         self.supervisor = Supervisor(self.store, self.policy, self.llm,
                                      self.retriever)
@@ -314,6 +319,18 @@ class ConversationService:
         interventions' outcomes, and the descriptive
         frustration/escalation table."""
         return signals.signal_report(self.store, self.policy)
+
+    # -- cost & latency (round 18) --------------------------------
+
+    def cost_report(self) -> dict:
+        """The cost report over every stored conversation: model
+        calls, tokens split by their basis (measured vs
+        estimated), and latency — overall, per desk, per day —
+        folded from the call records on the audit trails, with
+        the governed caps named beside the spend."""
+        from . import costs
+
+        return costs.cost_report(self.store, self.policy)
 
     # -- the daily quality pass (round 12) --------------------------
     def run_daily_quality(self, on=None, with_spot_check: bool = True):

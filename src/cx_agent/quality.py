@@ -9,7 +9,10 @@ end (round 8), the day's top unhandled-intent candidates (the
 round 8 mining pass, scoped to the day), escalation counts by
 reason, handoff quality (round 17: the day's incomplete
 packets with their gaps named, and the book's unaccepted
-handoffs past the acceptance threshold) — and a regression
+handoffs past the acceptance threshold),
+the day's model-call costs folded from their records (round 18:
+calls by kind, tokens split by basis, latency, and the budget
+and timeout closings) — and a regression
 spot-check that re-runs a
 deterministic sample of the eval trajectories against the
 current build and compares them with the committed baseline.
@@ -65,7 +68,7 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from . import attribution, care_book, continuity, handoffs, mining
+from . import attribution, care_book, continuity, costs, handoffs, mining
 from .clock import today
 from .models import DailyDigest
 
@@ -227,6 +230,7 @@ def run_daily_pass(store, policy, on: date | None = None, *,
         mining_candidates=candidates,
         escalations_by_reason=dict(sorted(escalations.items())),
         handoffs=handoff_section,
+        costs=costs.digest_section(store, id_set),
         spot_check=spot)
     store.save_digest(digest)
     return digest
@@ -576,6 +580,31 @@ def render_digest_markdown(digest: DailyDigest) -> str:
                 f"{row['age_days']} day(s) without a pickup.")
     else:
         lines.append("- No handoff is past the acceptance threshold.")
+    lines.append("")
+
+    # Costs (round 18): the day's model calls, folded from
+    # their records by the same fold the standing report runs —
+    # the tokens split by basis, the latency, and the closings
+    # the discipline produced inside the day's scope.
+    cst = digest.costs or {}
+    lines += ["## Cost and latency", ""]
+    if cst.get("calls"):
+        lines.append(
+            f"- {cst['calls']} model call(s):"
+            f" {cst['decision_calls']} decision,"
+            f" {cst['advisory_calls']} advisory;"
+            f" {cst['tokens']} tokens (estimated"
+            f" {cst['tokens_estimated']}, measured"
+            f" {cst['tokens_measured']}).")
+        lines.append(
+            f"- Latency mean {cst['mean_latency_ms']} ms · p95"
+            f" {cst['p95_latency_ms']} ms; timed-out calls"
+            f" {cst['timeouts']}, errored {cst['errors']}.")
+        lines.append(
+            f"- Closings: {cst['budget_exhaustions']} on budget,"
+            f" {cst['timeout_escalations']} on timeout.")
+    else:
+        lines.append("- No model calls recorded for the day.")
     lines.append("")
 
     spot = digest.spot_check

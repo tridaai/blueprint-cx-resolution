@@ -17,6 +17,26 @@ escalation.py, actions.py). If a live call fails, drafting degrades
 to the offline composer for that turn and the failure is logged —
 the rules never degrade with it.
 
+Every call is accounted (round 18). Each attempt — the compose
+call (kind `decision`), the router's tie-break hint (kind
+`advisory`), answered, errored or timed out — appends a record:
+its tokens with their basis (`measured` where the provider
+reported usage, `estimated` where the deterministic estimate
+stood in — the offline composer's calls always estimate), its
+outcome, and its wall-clock latency. The supervisor drains the
+records each turn onto the conversation's audit trail; budgets
+and the cost report fold from there (costs.py), so this boundary
+keeps no second set of books.
+
+Latency is disciplined the same way. A provider call carries
+the governed timeout (`Policy.model_call_timeout_seconds`,
+wired onto the live boundary by the service). A timed-out call
+is retried ONCE; a second timeout raises ModelTimeoutError out
+of the boundary — it does not degrade to the offline composer,
+because an answer assembled after a timeout would be a
+fabrication — and the supervisor closes the turn to a person
+with the reason `model_timeout`.
+
 The prompts themselves are not in this file: the compose and
 intent instructions are prompt-registry entries (prompts.py),
 resolved at call time at their active versions. A live drafter
@@ -28,6 +48,7 @@ falls back to a prompt from memory.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 
 from .config import LLMConfig
@@ -41,6 +62,61 @@ from .prompts import (
 )
 
 log = logging.getLogger("cx_agent.llm")
+
+
+class ModelTimeoutError(Exception):
+    """A model call — and its one governed retry — both timed
+    out. Raised out of the boundary, never degraded around: the
+    supervisor closes the turn to a person (`model_timeout`),
+    because a reply composed after a timeout would be made of
+    nothing."""
+
+
+def estimate_tokens(text: str) -> int:
+    """The deterministic token estimate: four characters to a
+    token, rounded up. Crude on purpose — stable across runs,
+    and labelled `estimated` wherever it surfaces, never dressed
+    as a measurement."""
+    return (len(text) + 3) // 4 if text else 0
+
+
+def _elapsed_ms(started: float) -> int:
+    return int(round((time.perf_counter() - started) * 1000))
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover — httpx is a dependency
+        return False
+    return isinstance(exc, httpx.TimeoutException)
+
+
+class _CallLedger:
+    """The boundary's pending call records: one per attempt,
+    drained by the supervisor onto the conversation's audit
+    trail each turn. A hand-off, not a store — nothing reads
+    the ledger but the drain, and the audit trail is the only
+    accounting that survives."""
+
+    def _init_ledger(self) -> None:
+        self._pending_calls: list[dict] = []
+
+    def _record_call(self, call_kind: str, *, attempt: int, outcome: str,
+                     tokens_in: int, tokens_out: int, basis: str,
+                     latency_ms: int, model: str = "") -> None:
+        self._pending_calls.append({
+            "call_kind": call_kind, "backend": self.backend,
+            "model": model, "attempt": attempt, "outcome": outcome,
+            "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "tokens": tokens_in + tokens_out,
+            "tokens_basis": basis, "latency_ms": latency_ms})
+
+    def drain_calls(self) -> list[dict]:
+        pending, self._pending_calls = self._pending_calls, []
+        return pending
 
 
 @dataclass
@@ -72,17 +148,38 @@ def _offline_compose(ctx: DraftContext) -> str:
     return " ".join(parts).strip()
 
 
-class OfflineLLM:
+class OfflineLLM(_CallLedger):
     backend = "offline"
 
+    def __init__(self) -> None:
+        self._init_ledger()
+
     def draft_reply(self, ctx: DraftContext) -> str:
-        return _offline_compose(ctx)
+        # The offline composer stands in for the decision call,
+        # and is accounted like one: its tokens are the
+        # deterministic estimate over the material it composed
+        # from and the reply it produced, labelled estimated.
+        started = time.perf_counter()
+        reply = _offline_compose(ctx)
+        prompt_text = "\n".join(
+            [ctx.customer_message, *ctx.findings, *ctx.must_include,
+             ctx.action_prompt])
+        self._record_call(
+            "decision", attempt=1, outcome="ok",
+            tokens_in=estimate_tokens(prompt_text),
+            tokens_out=estimate_tokens(reply), basis="estimated",
+            latency_ms=_elapsed_ms(started))
+        return reply
 
     def intent_hint(self, text: str) -> str | None:
+        # No call is made offline — the router commits on its own
+        # evidence — so no record is written. A record for a call
+        # that never happened would be the one fabrication this
+        # ledger exists to prevent.
         return None
 
 
-class LiveLLM:
+class LiveLLM(_CallLedger):
     # The prompt registry the prompts resolve from — wired by the
     # service at construction. Deliberately not defaulted: a live
     # drafter without a registry refuses (see _require_prompts).
@@ -91,6 +188,16 @@ class LiveLLM:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
         self.backend = config.backend
+        self._init_ledger()
+        # The governed per-call timeout (Policy carries the
+        # value; the service wires it on). Sixty seconds is the
+        # boundary's own default for a directly built boundary.
+        self.timeout_seconds = 60.0
+        # The last provider response's reported usage, as
+        # (tokens_in, tokens_out) — set by _chat, read by the
+        # attempt that made the call. None when the provider
+        # reported none: the attempt then estimates, and says so.
+        self._last_usage: tuple[int, int] | None = None
 
     def _require_prompts(self):
         if self.prompts is None:
@@ -114,20 +221,28 @@ class LiveLLM:
                       "messages": [{"role": "system", "content": system},
                                    {"role": "user", "content": user}],
                       "temperature": 0.3},
-                timeout=60,
+                timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            body = resp.json()
+            usage = body.get("usage") or {}
+            self._last_usage = (usage.get("prompt_tokens"),
+                                usage.get("completion_tokens"))
+            return body["choices"][0]["message"]["content"]
         if cfg.backend == "anthropic":
             resp = httpx.post(
                 f"{cfg.base_url.rstrip('/')}/v1/messages",
                 headers={"x-api-key": cfg.api_key, "anthropic-version": "2023-06-01"},
                 json={"model": cfg.model, "max_tokens": 700, "system": system,
                       "messages": [{"role": "user", "content": user}]},
-                timeout=60,
+                timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
-            blocks = resp.json()["content"]
+            body = resp.json()
+            usage = body.get("usage") or {}
+            self._last_usage = (usage.get("input_tokens"),
+                                usage.get("output_tokens"))
+            blocks = body["content"]
             return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         if cfg.backend == "ollama":
             resp = httpx.post(
@@ -135,11 +250,75 @@ class LiveLLM:
                 json={"model": cfg.model, "stream": False,
                       "messages": [{"role": "system", "content": system},
                                    {"role": "user", "content": user}]},
-                timeout=60,
+                timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"]
+            body = resp.json()
+            self._last_usage = (body.get("prompt_eval_count"),
+                                body.get("eval_count"))
+            return body["message"]["content"]
         raise ValueError(f"unknown backend {cfg.backend}")
+
+    # -- the guarded attempt --------------------------------------------
+    def _attempt(self, call_kind: str, attempt: int, system: str,
+                 user: str) -> str | None:
+        """One provider call, recorded however it ends: the text
+        on success, None on an ordinary failure (the caller
+        degrades, as it always has). A timeout is recorded and
+        raised as ModelTimeoutError — the retry decision, and
+        what a second timeout means, belong to `_guarded` and
+        the supervisor, not to a silent fallback here."""
+        self._last_usage = None
+        started = time.perf_counter()
+        prompt_text = system + "\n" + user
+        try:
+            text = self._chat(system, user)
+        except Exception as exc:
+            latency = _elapsed_ms(started)
+            if _is_timeout(exc):
+                self._record_call(
+                    call_kind, attempt=attempt, outcome="timeout",
+                    tokens_in=estimate_tokens(prompt_text),
+                    tokens_out=0, basis="estimated",
+                    latency_ms=latency, model=self.config.model)
+                raise ModelTimeoutError(
+                    f"the {call_kind} call timed out "
+                    f"(attempt {attempt}, backend {self.backend})"
+                ) from exc
+            self._record_call(
+                call_kind, attempt=attempt, outcome="error",
+                tokens_in=estimate_tokens(prompt_text),
+                tokens_out=0, basis="estimated",
+                latency_ms=latency, model=self.config.model)
+            log.warning("live model call failed",
+                        extra={"fields": {"error": str(exc)}})
+            return None
+        latency = _elapsed_ms(started)
+        usage_in, usage_out = self._last_usage or (None, None)
+        if usage_in is not None and usage_out is not None:
+            tokens_in, tokens_out, basis = usage_in, usage_out, "measured"
+        else:
+            tokens_in = estimate_tokens(prompt_text)
+            tokens_out = estimate_tokens(text)
+            basis = "estimated"
+        self._record_call(
+            call_kind, attempt=attempt, outcome="ok",
+            tokens_in=tokens_in, tokens_out=tokens_out, basis=basis,
+            latency_ms=latency, model=self.config.model)
+        return text
+
+    def _guarded(self, call_kind: str, system: str, user: str) -> str | None:
+        """A call with its one governed retry on timeout. A
+        second timeout raises ModelTimeoutError out of the
+        boundary; any other failure returns None and the caller
+        degrades."""
+        for attempt in (1, 2):
+            try:
+                return self._attempt(call_kind, attempt, system, user)
+            except ModelTimeoutError:
+                if attempt == 2:
+                    raise
+        return None  # pragma: no cover — the loop always returns or raises
 
     # -- the two language jobs -----------------------------------------
     def draft_reply(self, ctx: DraftContext) -> str:
@@ -160,13 +339,14 @@ class LiveLLM:
             customer_message=ctx.customer_message, facts=facts,
             verbatim=verbatim or "- (none)",
             action_prompt=ctx.action_prompt or "(none)", sources=sources)
-        try:
-            text = self._chat(system, user).strip()
-            if text:
-                return text
-        except Exception as exc:  # drafting degrades, rules do not
-            log.warning("live drafting failed; offline composer used",
-                        extra={"fields": {"error": str(exc)}})
+        # A double timeout leaves the boundary as
+        # ModelTimeoutError — the supervisor closes the turn to
+        # a person rather than composing from nothing. Any other
+        # failure degrades to the offline composer, as before:
+        # drafting degrades, rules do not.
+        text = self._guarded("decision", system, user)
+        if text and text.strip():
+            return text.strip()
         return _offline_compose(ctx)
 
     def intent_hint(self, text: str) -> str | None:
@@ -175,12 +355,11 @@ class LiveLLM:
         system = registry.active_text(INTENT_SYSTEM_ID)
         user = render_template(registry.active_text(INTENT_USER_ID),
                                labels=allowed, text=text)
-        try:
-            out = self._chat(system, user).strip().lower()
-            return out if out in allowed.split(", ") else None
-        except Exception as exc:
-            log.warning("intent hint failed", extra={"fields": {"error": str(exc)}})
+        out = self._guarded("advisory", system, user)
+        if out is None:
             return None
+        out = out.strip().lower()
+        return out if out in allowed.split(", ") else None
 
 
 def make_llm(config: LLMConfig | None = None):
