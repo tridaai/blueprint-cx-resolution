@@ -151,6 +151,16 @@ class Policy:
     max_decision_calls_per_conversation: int = 40
     max_estimated_tokens_per_conversation: int = 100_000
     model_call_timeout_seconds: int = 60
+    # Channel discipline (round 19): the email rendering's length
+    # cap, in characters — truncation drops whole unprotected
+    # sentences and never a figure, a must-include line, or the
+    # Sources line (channels.py), so the cap yields to those
+    # guarantees. And the voice rendering's sentence cap, in
+    # words: longer sentences split at clause boundaries, and a
+    # clause still over the cap stands whole rather than cut a
+    # spelled figure in two.
+    email_reply_max_chars: int = 2000
+    voice_max_sentence_words: int = 18
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -223,6 +233,11 @@ class Policy:
             model_call_timeout_seconds=num(
                 "CX_MODEL_CALL_TIMEOUT_SECONDS",
                 base.model_call_timeout_seconds),
+            email_reply_max_chars=num(
+                "CX_EMAIL_REPLY_MAX_CHARS", base.email_reply_max_chars),
+            voice_max_sentence_words=num(
+                "CX_VOICE_MAX_SENTENCE_WORDS",
+                base.voice_max_sentence_words),
         )
 
 

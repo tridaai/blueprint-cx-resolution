@@ -719,6 +719,9 @@ class DailyDigest(BaseModel):
     costs: dict = {}  # cost & latency (round 18): the day's model
     #                   calls folded from their records — calls by
     #                   kind, tokens by basis, latency, closings
+    channels: dict = {}  # conversations by channel (round 19):
+    #                      the day's set counted by the channel
+    #                      recorded on each conversation
     spot_check: dict = {}  # the regression spot-check's findings
 
 
@@ -977,6 +980,15 @@ class PromptAct(BaseModel):
 
 class Conversation(BaseModel):
     conversation_id: str
+    # The channel the conversation belongs to (round 19):
+    # web_chat | voice_transcript | email, set at creation and
+    # never moved — it governs presentation only (channels.py);
+    # identity, policy and money rules never read it.
+    channel: str = "web_chat"
+    # The subject of the most recent inbound email (round 19):
+    # envelope context, stored verbatim, screened on arrival —
+    # never an instruction, never read by a decision.
+    channel_subject: str = ""
     customer_id: str | None = None
     account_number: str | None = None
     status: str = "active"  # active | escalated | resolved | closed
@@ -1003,6 +1015,15 @@ class Conversation(BaseModel):
 class TurnResult(BaseModel):
     conversation_id: str
     reply: str
+    # The channel rendering of the reply (round 19): what the
+    # customer on this conversation's channel receives. For
+    # web_chat it is the reply itself; for email a plain-text,
+    # cap-respecting rendering with `email_subject` as its
+    # subject line; for voice_transcript the spoken-form view.
+    # The canonical reply above is what the record stores.
+    channel: str = "web_chat"
+    rendered_reply: str = ""
+    email_subject: str = ""
     intent: str
     identity_state: str
     status: str
