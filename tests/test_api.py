@@ -227,3 +227,39 @@ def test_retention_endpoints():
     assert report["cancellations_completed"] == \
         before["cancellations_completed"] + 1
     assert report["offers_made"] == before["offers_made"]
+
+
+def test_handoff_acceptance_over_http():
+    """Round 17: the queue shows the packet's grade, and picking
+    a handoff up is a recorded act on the same surface."""
+    client = TestClient(app)
+    client.post("/seed")
+    conv = client.post("/conversations").json()
+    cid = conv["conversation_id"]
+    client.post(f"/conversations/{cid}/messages",
+                json={"text": "Let me talk to a real person"})
+    turn = client.post(f"/conversations/{cid}/messages",
+                       json={"text": "No, I said get me a human"}).json()
+    assert turn["escalated"] is True
+    assert "steps we tried" not in turn["reply"]
+
+    listing = client.get("/escalations").json()
+    mine = [e for e in listing["escalations"]
+            if e["conversation_id"] == cid]
+    assert len(mine) == 1
+    esc = mine[0]
+    assert esc["packet"]["complete"] is False
+    assert esc["packet"]["missing"] == ["tried"]
+    assert esc["accepted_by"] == ""
+    assert listing["unaccepted_overdue"] == []
+
+    accepted = client.post(f"/escalations/{esc['escalation_id']}/accept",
+                           json={"receiver": "j.riera"})
+    assert accepted.status_code == 200
+    assert accepted.json()["escalation"]["accepted_by"] == "j.riera"
+    again = client.post(f"/escalations/{esc['escalation_id']}/accept",
+                        json={"receiver": "someone.else"})
+    assert again.status_code == 409
+    missing = client.post("/escalations/ESC-nope/accept",
+                          json={"receiver": "j.riera"})
+    assert missing.status_code == 404

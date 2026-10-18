@@ -54,7 +54,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("CX_TODAY", "2026-10-01")
 
-from cx_agent import attribution, care_book, mining, payments_book  # noqa: E402
+from cx_agent import attribution, care_book, handoffs, mining  # noqa: E402
+from cx_agent import payments_book  # noqa: E402
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
 from cx_agent.store import InMemoryStore  # noqa: E402
@@ -136,7 +137,13 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # that is not the same run — exact or failed.
            "continuity_item_kinds", "continuity_open_count",
            "continuity_broken_count", "continuity_resumed_run",
-           "runs_for_account", "run_bound_to_main"}
+           "runs_for_account", "run_bound_to_main",
+           # Round 17: a handoff packet's completeness grade and
+           # the queue's pickup state are record state — a gap
+           # the grade failed to name, or an overdue handoff the
+           # surfacing missed, is exact or failed.
+           "packet_complete", "packet_missing", "packet_class",
+           "unaccepted_overdue_count", "accepted_count"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -401,6 +408,20 @@ def check_final(service, scenario: dict, conv_id: str,
     values["run_bound_to_main"] = bool(
         run and run.conversation_id == conv_id)
     packet = escalations[-1].packet if escalations else None
+    # Round 17: the handoff packet's completeness grade, its
+    # contents at element level, and the queue's pickup state —
+    # handoffs nobody accepted past the threshold are counted
+    # with the same code the operators' views use.
+    values["packet_complete"] = packet.complete if packet else None
+    values["packet_missing"] = packet.missing if packet else None
+    values["packet_class"] = packet.handoff_class if packet else None
+    values["packet_issue"] = packet.issue if packet else None
+    values["packet_tried_count"] = len(packet.tried) if packet else 0
+    values["packet_figures_count"] = len(packet.figures) if packet else 0
+    values["unaccepted_overdue_count"] = len(
+        handoffs.unaccepted_overdue(store, service.policy))
+    values["accepted_count"] = sum(
+        1 for e in store.list_escalations() if e.accepted_by)
     values["packet_incident_ids"] = [
         k["incident_id"] for k in (packet.known_incidents if packet else [])]
     values["packet_signal_effort"] = (
@@ -460,6 +481,28 @@ def apply_poke(service, poke: dict) -> None:
                 date.fromisoformat(record.response_due)
                 - timedelta(days=complaint_days)).isoformat()
             store.save_complaint(record)
+    esc_days = int(poke.get("age_escalations_days", 0))
+    if esc_days:
+        # Time passes over the human queue: escalations already
+        # raised grow older, so an unaccepted one crosses the
+        # acceptance threshold while the customer is away.
+        for esc in store.list_escalations():
+            if esc.created_date:
+                esc.created_date = (
+                    date.fromisoformat(esc.created_date)
+                    - timedelta(days=esc_days)).isoformat()
+                store.save_escalation(esc)
+    if poke.get("accept_escalation"):
+        # The receiving side does its act between contacts: the
+        # oldest unaccepted handoff is picked up by the named
+        # receiver (handoffs.accept_handoff — the operators'
+        # own code path).
+        waiting = [e for e in store.list_escalations()
+                   if not e.accepted_by]
+        if waiting:
+            handoffs.accept_handoff(
+                store, waiting[0].escalation_id,
+                poke["accept_escalation"])
     if poke.get("run_complaint_watch"):
         # The operator runs the SLA watch between contacts: a
         # breached complaint lands in the queue before the
@@ -487,7 +530,8 @@ def apply_poke(service, poke: dict) -> None:
             if key in ("account", "age_actions_days", "run_autopay",
                        "break_arrangements", "age_complaints_days",
                        "run_complaint_watch", "resolve_incident",
-                       "add_incident"):
+                       "add_incident", "age_escalations_days",
+                       "accept_escalation"):
                 continue
             if key in ("balance_due", "roaming_gb_used", "credit_balance"):
                 value = Decimal(str(value))
