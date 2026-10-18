@@ -438,6 +438,28 @@ code, never instructions to a model.
   them on its own. What the customer is told was passed on is
   generated from the packet itself, element by element — an
   incomplete packet produces a shorter line, never a false one.
+- **Cost & latency** — every model call is a record before it
+  is a number: the compose call (a *decision* call) and the
+  router's tie-break hint (an *advisory* call) each land on the
+  conversation's audit trail with their tokens and wall-clock
+  latency. Tokens are **measured** where the provider reported
+  usage and **estimated** by a deterministic estimate everywhere
+  else — the offline backend always estimates, and the two are
+  never summed without their labels. Budgets are governed
+  Policy values, read from those records at the start of a
+  turn: when a conversation has spent its decision calls or its
+  tokens, the current turn has already completed — the *next*
+  one closes it gracefully, one plain line that a person will
+  pick it up, a graded handoff packet, reason `budget_exhausted`.
+  A model call carries a governed timeout and exactly one
+  retry; a second timeout closes the turn the same way, reason
+  `model_timeout` — no answer is ever composed out of a call
+  that never answered. Attribution reads both closings as the
+  design working. The report folds from the records — per desk,
+  per day, overall — on the API (`GET /costs/report`), the CLI
+  (`cx-agent costs`), the console, and as a section of the
+  daily digest; the totals reconcile by construction, because
+  nothing keeps a second set of books.
 - **Signals** — frustration, effort, progress and confusion are
   computed per turn from the conversation's own records (a
   governed lexicon, counted effort components, a repeat-overlap
@@ -511,7 +533,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1422/1422 assertions, 1085/1085 zero-tolerance. The
+the tree: 1462/1462 assertions, 1125/1125 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -521,7 +543,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (364 tests) covers the deterministic core —
+The pytest suite (376 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, the retention flow (the case record, the one
@@ -534,7 +556,10 @@ promises ledger's due states, the adopted procedure run),
 handoff quality (the completeness grade per escalation class,
 acceptance stamped and singular, the overdue read by the
 shared clock, the digest naming both, the transfer line held
-to the packet), store
+to the packet), cost & latency discipline (the call records
+on the audit trail, the fold's reconciliation, both caps
+closing the next turn, the retry-once timeout closing the
+turn to a person), store
 conformance across the SQLite and in-memory profiles (the
 PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
@@ -599,6 +624,10 @@ src/cx_agent/
                    escalation class, the customer line generated
                    from the packet, acceptance as a recorded act,
                    the unaccepted-and-overdue read
+  costs.py         cost & latency discipline: the fold over the
+                   model-call records — per-conversation usage
+                   (what the budget reads), the operator report
+                   per desk and per day, the digest's section
   prompts.py       the prompt registry: every governed text as
                    versioned data (compose + intent prompts, the
                    explanation forms, the policy corpus), the

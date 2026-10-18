@@ -732,7 +732,10 @@ LLM backend, and whether S3 is configured.
 ## Failure posture
 
 - A live drafting failure degrades that turn to the offline
-  composer; the rules do not degrade with it.
+  composer; the rules do not degrade with it. The one
+  exception is a timeout (round 18): a call that timed out
+  twice does not degrade into a composed-from-nothing answer —
+  the turn closes to a person instead (`model_timeout`).
 - A blocked action is explained, not retried silently.
 - An escalated conversation refuses further agent turns; a human
   owns it, and the refusal says so.
@@ -1228,18 +1231,93 @@ gate holds the line to the packet in both directions
 reply_not_contains where an element is absent, graded
 zero-tolerance).
 
+## Cost & latency discipline
+
+Round 18 makes the model boundary keep accounts, and then
+holds conversations to them.
+
+**The records come first.** Every attempt at the boundary —
+the compose call (kind `decision`) and the router's
+tie-break hint (kind `advisory`), answered, errored or
+timed out — appends a record: its tokens with their basis
+(`measured` where the provider's response carried usage,
+`estimated` where the deterministic four-characters-a-token
+estimate stood in; the offline composer's calls always
+estimate), its outcome, and its wall-clock latency. The
+boundary holds the records only until the supervisor drains
+them, at finalize, onto the conversation's audit trail,
+stamped with the day (the shared clock) and the desk that
+owned the turn. From there, `costs.py` is the only fold:
+per-conversation usage, the operator report (overall, per
+desk, per day — calls by kind, tokens by basis, mean and
+p95 latency, the outcome counts), and the daily digest's
+cost section. The reconciliation is structural, not
+checked-after-the-fact: there are no counters anywhere, so
+the report totals *are* the conversation totals *are* the
+record sums.
+
+**Budgets are policy, read from the records.** Two governed
+caps (Policy, env-overridable like the other governed
+values) bound a conversation: decision calls, and recorded
+tokens. The check runs in the screen node, after the
+escalation rules and before anything spends: it folds the
+conversation's usage so far, and if a cap is met it replaces
+the turn's decision with an escalation —
+`budget_exhausted`, the general queue — and writes the cap
+event to the audit trail with the observed usage beside the
+caps. Because the read happens at the start of a turn, the
+turn that crosses a cap completes in full; the closing turn
+itself makes no model call at all. The closing reuses the
+ordinary escalation machinery — handoff packet, completeness
+grade, reference — and leads with one plain line: the
+conversation has used the amount of automated help it can be
+given, and a person will pick it up from here.
+
+**Latency is a boundary rule, with one retry.** The
+per-call timeout is governed (Policy; the service wires it
+onto the live boundary, replacing what was a hardcoded
+sixty seconds inside the transport call). A timeout is
+detected at the attempt, recorded, and retried exactly
+once. A second timeout raises `ModelTimeoutError` out of
+the boundary — draft and advisory paths alike — and the
+supervisor catches it around the graph invocation and
+routes the turn through escalation with reason
+`model_timeout`: packet, grade, reference, and the two
+timed-out attempts on the audit trail. No turn hangs past
+two governed timeouts, and no answer is composed after a
+timeout out of nothing. Every other failure keeps the older
+posture: recorded with outcome `error`, drafting degrades
+to the offline composer, the hint degrades to no hint.
+Attribution counts both closings as designed escalations
+(`escalated_by_design:budget_exhausted`,
+`escalated_by_design:model_timeout`) — an agent that hands
+over because its budget or its clock said so is the
+discipline working, not a failure to attribute.
+
+The offline backend never times out; in tests and evals the
+double-timeout is exercised only through labelled doubles
+(the live boundary over a stubbed transport in the unit
+tests, a raising double in this runner) that live outside
+production code. The evals grade the discipline end to end:
+a long dispute conversation under a tightened call cap
+completes its crossing turn and closes with a complete
+packet; the double-timeout scenario closes with the reason;
+and a short conversation's recorded calls and tokens are
+pinned exactly, as zero-tolerance keys.
+
 ## Round map
 
-This document describes rounds 1–17 (core; rerouting and
+This document describes rounds 1–18 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
 pass; the prompt registry and its lint; the retention flow;
-known-issue awareness; continuity; handoff quality).
-The scheduled deepening — cost budgets — is
-laid out in the blueprint backlog; the
+known-issue awareness; continuity; handoff quality; cost &
+latency discipline).
+The remaining scheduled deepening — channel discipline and
+release hardening — is laid out in the blueprint backlog; the
 architecture above is shaped so each lands as a new node,
 desk behavior, or report over the same records, not as a
 rewrite.
