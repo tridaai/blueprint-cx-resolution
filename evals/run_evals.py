@@ -129,7 +129,14 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # the known-issue note its handoff packet carried are
            # record state — exact or failed.
            "incidents_matched", "packet_incident_ids",
-           "incident_status"}
+           "incident_status",
+           # Round 16: the continuity briefing's contents are
+           # record state — an item claimed without a record
+           # behind it, a broken promise missed, a resumed walk
+           # that is not the same run — exact or failed.
+           "continuity_item_kinds", "continuity_open_count",
+           "continuity_broken_count", "continuity_resumed_run",
+           "runs_for_account", "run_bound_to_main"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -372,6 +379,27 @@ def check_final(service, scenario: dict, conv_id: str,
     if scenario.get("incident"):
         named = store.get_incident(scenario["incident"])
         values["incident_status"] = named.status if named else None
+    # Round 16: the continuity briefing this conversation was
+    # opened with — the snapshot computed at verification, read
+    # off the conversation — and the procedure runs standing on
+    # its account, so a resumed walk is graded on being the same
+    # stored run, rebound to this conversation.
+    cont_snapshot = ((conv.specialist_state.get("continuity") or {})
+                     .get("briefing") or {}) if conv else {}
+    values["continuity_item_kinds"] = sorted(
+        item["kind"] for item in cont_snapshot.get("open_items", []))
+    values["continuity_open_count"] = len(
+        cont_snapshot.get("open_items", []))
+    values["continuity_broken_count"] = len(
+        cont_snapshot.get("broken_promises", []))
+    values["continuity_resumed_run"] = bool(
+        cont_snapshot.get("resumable_run_id"))
+    account_runs = ([r for r in store.list_procedure_runs()
+                     if r.account_number == conv.account_number]
+                    if conv and conv.account_number else [])
+    values["runs_for_account"] = len(account_runs)
+    values["run_bound_to_main"] = bool(
+        run and run.conversation_id == conv_id)
     packet = escalations[-1].packet if escalations else None
     values["packet_incident_ids"] = [
         k["incident_id"] for k in (packet.known_incidents if packet else [])]
