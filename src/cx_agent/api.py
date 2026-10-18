@@ -51,6 +51,19 @@ class MessageIn(BaseModel):
     text: str
 
 
+class ConversationIn(BaseModel):
+    channel: str = "web_chat"
+
+
+class EmailIn(BaseModel):
+    subject: str = ""
+    body: str
+
+
+class TranscriptIn(BaseModel):
+    text: str
+
+
 class HandoffAcceptIn(BaseModel):
     receiver: str
 
@@ -133,9 +146,14 @@ def seed() -> dict:
 
 
 @app.post("/conversations", dependencies=[Depends(require_key)])
-def start_conversation() -> dict:
-    conv = service.start_conversation()
-    return {"conversation_id": conv.conversation_id, "status": conv.status}
+def start_conversation(body: ConversationIn | None = None) -> dict:
+    try:
+        conv = service.start_conversation(
+            channel=(body.channel if body else "web_chat"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"conversation_id": conv.conversation_id,
+            "status": conv.status, "channel": conv.channel}
 
 
 @app.get("/conversations", dependencies=[Depends(require_key)])
@@ -145,6 +163,7 @@ def list_conversations() -> dict:
         rows.append({
             "conversation_id": conv.conversation_id,
             "status": conv.status,
+            "channel": conv.channel,
             "intent": conv.intent.value,
             "identity_state": conv.identity_state.value,
             "account_number": conv.account_number,
@@ -168,6 +187,29 @@ def post_message(conversation_id: str, body: MessageIn) -> dict:
     token = conversation_id_var.set(conversation_id)
     try:
         result = service.post_message(conversation_id, body.text)
+    finally:
+        conversation_id_var.reset(token)
+    return result.model_dump(mode="json")
+
+
+@app.post("/conversations/{conversation_id}/emails",
+          dependencies=[Depends(require_key)])
+def post_email(conversation_id: str, body: EmailIn) -> dict:
+    token = conversation_id_var.set(conversation_id)
+    try:
+        result = service.post_email(
+            conversation_id, body.subject, body.body)
+    finally:
+        conversation_id_var.reset(token)
+    return result.model_dump(mode="json")
+
+
+@app.post("/conversations/{conversation_id}/transcripts",
+          dependencies=[Depends(require_key)])
+def post_transcript(conversation_id: str, body: TranscriptIn) -> dict:
+    token = conversation_id_var.set(conversation_id)
+    try:
+        result = service.post_transcript(conversation_id, body.text)
     finally:
         conversation_id_var.reset(token)
     return result.model_dump(mode="json")

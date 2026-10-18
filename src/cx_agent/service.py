@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import attribution, care_book, continuity, handoffs, incidents, mining
+from . import attribution, care_book, channels, continuity, handoffs
+from . import incidents, mining
 from . import retention_book, signals
+from .screening import screen as screen_text
 from . import prompts as prompts_mod
 from .clock import today
 from .config import LLMConfig, Policy
@@ -52,8 +54,20 @@ class ConversationService:
     def seed(self) -> dict:
         return seed_store(self.store)
 
-    def start_conversation(self) -> Conversation:
-        conv = Conversation(conversation_id=f"CONV-{uuid.uuid4().hex[:10]}")
+    def start_conversation(self, channel: str = channels.DEFAULT_CHANNEL
+                           ) -> Conversation:
+        """Open a conversation on a channel (round 19). The
+        channel is recorded on the conversation at creation and
+        never moves: it governs how replies are rendered and how
+        inbound envelopes are parsed — nothing else. An unknown
+        channel is refused here, at the door."""
+        if not channels.valid_channel(channel):
+            raise ValueError(
+                f"unknown channel {channel!r}: "
+                f"expected one of {', '.join(channels.CHANNELS)}")
+        conv = Conversation(
+            conversation_id=f"CONV-{uuid.uuid4().hex[:10]}",
+            channel=channel)
         self.store.save_conversation(conv)
         return conv
 
@@ -477,17 +491,78 @@ class ConversationService:
             return None
         return incidents.conversation_matches(self.store, conv)
 
+    # -- channel ingest (round 19) ----------------------------------
+    def _ingest_conversation(self, conversation_id: str,
+                             channel: str) -> Conversation:
+        """The record an inbound envelope lands on: the existing
+        conversation, or a fresh one whose channel is the door it
+        came through. An existing conversation's channel never
+        moves — an email arriving on a web-chat conversation is
+        answered under the recorded channel."""
+        conv = self.store.get_conversation(conversation_id)
+        if conv is None:
+            conv = Conversation(conversation_id=conversation_id,
+                                channel=channel)
+            self.store.save_conversation(conv)
+        return conv
+
+    def post_email(self, conversation_id: str, subject: str,
+                   body: str) -> TurnResult:
+        """An email arrives. The subject is envelope context: it
+        is screened like any customer text the moment it lands —
+        an injection attempt in it is audit-logged with the
+        patterns it matched — and stored on the record verbatim.
+        It is never the message: routing, identity, policy and
+        money all read the parsed body alone, so a subject line
+        cannot instruct the agent, only be filed. The body is
+        parsed deterministically (quoted history removed) and
+        posted as the customer's turn."""
+        conv = self._ingest_conversation(conversation_id, "email")
+        parsed = channels.parse_email(subject, body)
+        verdict = screen_text(parsed["subject"])
+        if parsed["subject"]:
+            self.store.save_audit(AuditEvent(
+                event_id=f"EVT-{uuid.uuid4().hex[:10]}",
+                conversation_id=conv.conversation_id, kind="screening",
+                detail={"source": "email_subject",
+                        "injection_attempt": verdict.injection,
+                        "matched": verdict.matched},
+                turn=conv.turns))
+        conv.channel_subject = parsed["subject"]
+        self.store.save_conversation(conv)
+        return self.post_message(conversation_id, parsed["text"])
+
+    def post_transcript(self, conversation_id: str, text: str
+                        ) -> TurnResult:
+        """A voice transcript arrives: the customer's words with
+        the diarisation stripped by the governed rules in
+        channels.parse_transcript (timestamps off; with labelled
+        speakers, the customer-side lines only). What remains is
+        posted as the customer's turn — the same words, read by
+        the same machinery, as any channel's."""
+        self._ingest_conversation(conversation_id, "voice_transcript")
+        return self.post_message(
+            conversation_id, channels.parse_transcript(text))
+
     # -- the turn ---------------------------------------------------------
     def post_message(self, conversation_id: str, text: str) -> TurnResult:
         conv = self.store.get_conversation(conversation_id)
         if conv is None:
             conv = Conversation(conversation_id=conversation_id)
         if conv.status == "escalated":
+            reply = ("This conversation has been transferred to a person "
+                     "on our team — they'll pick it up from here with the "
+                     "full summary attached.")
+            rendered = channels.render_reply(
+                conv.channel, reply, intent=conv.intent.value,
+                status=conv.status, escalated=True,
+                email_max_chars=self.policy.email_reply_max_chars,
+                voice_max_words=self.policy.voice_max_sentence_words)
             return TurnResult(
                 conversation_id=conv.conversation_id,
-                reply=("This conversation has been transferred to a person "
-                       "on our team — they'll pick it up from here with the "
-                       "full summary attached."),
+                reply=reply, channel=conv.channel,
+                rendered_reply=rendered.text,
+                email_subject=rendered.subject,
                 intent=conv.intent.value,
                 identity_state=conv.identity_state.value,
                 status=conv.status, escalated=True,

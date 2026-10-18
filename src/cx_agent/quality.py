@@ -12,7 +12,8 @@ packets with their gaps named, and the book's unaccepted
 handoffs past the acceptance threshold),
 the day's model-call costs folded from their records (round 18:
 calls by kind, tokens split by basis, latency, and the budget
-and timeout closings) — and a regression
+and timeout closings), the day's conversations counted by the
+channel recorded on each (round 19) — and a regression
 spot-check that re-runs a
 deterministic sample of the eval trajectories against the
 current build and compares them with the committed baseline.
@@ -141,6 +142,19 @@ def _signal_section(store, conversation_ids: list[str]) -> dict:
     }
 
 
+def _channel_section(store, conversation_ids: list[str]) -> dict:
+    """Conversations by channel (round 19): the day's set counted
+    by the channel recorded on each conversation. The channel
+    governs presentation only, so this section is a read of where
+    the day's conversations happened — it carries no judgement
+    about any of them."""
+    counts: Counter = Counter()
+    for cid in conversation_ids:
+        conv = store.get_conversation(cid)
+        counts[conv.channel if conv else "web_chat"] += 1
+    return dict(sorted(counts.items()))
+
+
 def _complaint_section(store, policy, on: date) -> dict:
     """The complaint book's SLA state at day end: every complaint
     recorded on or before the date, counted by the state the
@@ -231,6 +245,7 @@ def run_daily_pass(store, policy, on: date | None = None, *,
         escalations_by_reason=dict(sorted(escalations.items())),
         handoffs=handoff_section,
         costs=costs.digest_section(store, id_set),
+        channels=_channel_section(store, conversation_ids),
         spot_check=spot)
     store.save_digest(digest)
     return digest
@@ -319,12 +334,12 @@ def _run_scenario(module, scenario: dict) -> list[str]:
             service.post_message(
                 seeded.conversation_id,
                 module._substitute(seed_turn["say"]))
-    conv = service.start_conversation()
+    conv = service.start_conversation(
+        channel=scenario.get("channel") or "web_chat")
     for idx, turn in enumerate(scenario["turns"], start=1):
         if turn.get("poke"):
             module.apply_poke(service, turn["poke"])
-        result = service.post_message(
-            conv.conversation_id, module._substitute(turn["say"]))
+        result = module.play_turn(service, conv.conversation_id, turn)
         module.check_turn(result, turn.get("expect") or {}, failures,
                           f"{scenario['id']} turn {idx}",
                           scenario.get("zt", False))
@@ -489,6 +504,8 @@ def render_digest_markdown(digest: DailyDigest) -> str:
     ]
     lines += _counts_block("Volume by outcome", digest.by_outcome)
     lines += _counts_block("Volume by entry desk", digest.by_entry_desk)
+    lines += _counts_block("Conversations by channel",
+                           digest.channels or {})
 
     lines += ["## Why conversations ended", ""]
     if digest.cause_mix:

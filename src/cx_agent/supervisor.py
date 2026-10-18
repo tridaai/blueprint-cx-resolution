@@ -27,6 +27,7 @@ from langgraph.graph import END, StateGraph
 
 from . import actions as action_mod
 from . import billing_book
+from . import channels as channels_mod
 from . import continuity
 from . import costs as costs_mod
 from . import incidents as incidents_mod
@@ -104,6 +105,7 @@ class TurnState(TypedDict, total=False):
     decision: esc_mod.EscalationDecision
     result: SpecialistResult
     reply: str
+    must_include: list  # the verbatim lines the reply guarantees (compose)
     action_record: object
     escalated: bool
     first_human_ask: bool
@@ -1244,6 +1246,10 @@ class Supervisor:
             refs = "; ".join(f"{d} ({t})" for d, t in citations)
             reply = f"{reply} Sources: {refs}.".strip()
         state["reply"] = reply
+        # The verbatim lines this reply guarantees, kept for the
+        # channel rendering at finalize: email truncation may
+        # shorten around them, never through them (round 19).
+        state["must_include"] = must_include
         return state
 
     # -- escalation ----------------------------------------------------------------
@@ -1319,9 +1325,27 @@ class Supervisor:
     def _finalize(self, state: TurnState) -> TurnState:
         conv = state["conv"]
         self._drain_calls(conv)
+        # Channel discipline (round 19): the canonical reply is
+        # rendered for the conversation's channel here, in code —
+        # the rendering is a view of the composed reply, computed
+        # after every guarantee above has been applied, and it
+        # never feeds back into the record: the conversation
+        # stores the canonical text.
+        rendered = channels_mod.render_reply(
+            conv.channel, state.get("reply", ""),
+            intent=conv.intent.value, status=conv.status,
+            escalated=bool(state.get("escalated")),
+            email_max_chars=self.policy.email_reply_max_chars,
+            voice_max_words=self.policy.voice_max_sentence_words,
+            must_include=(state.get("must_include")
+                          or (state["result"].must_include
+                              if state.get("result") else [])))
         state["turn_result"] = TurnResult(
             conversation_id=conv.conversation_id,
             reply=state.get("reply", ""),
+            channel=conv.channel,
+            rendered_reply=rendered.text,
+            email_subject=rendered.subject,
             intent=conv.intent.value,
             identity_state=conv.identity_state.value,
             status=conv.status,
