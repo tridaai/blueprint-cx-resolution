@@ -420,6 +420,24 @@ code, never instructions to a model.
   packet built from the record — summary, attempts, actions taken,
   open items — and, since round 11, the signal summary: what the
   conversation cost the customer and what was already tried.
+- **Handoff quality** — since round 17 the packet also carries
+  the issue in the customer's own words, the verification
+  attempts spent, what was tried at step level (procedure
+  outcomes, dispute lines as decided), the figures the case
+  turns on, and the account's open promises and complaints from
+  the promises ledger — and it is **graded in code** against the
+  elements its class of escalation requires (an immediate
+  fraud transfer is not graded on history it cannot have; a
+  standard handoff is graded on all of it). A packet missing an
+  element is marked incomplete with the gaps named — on the
+  packet, in the audit trail, and in the daily digest — but the
+  transfer is never blocked on paperwork. Picking a handoff up
+  is a recorded act (receiver and day on the escalation), and
+  handoffs nobody has picked up past a governed threshold are
+  named by the digest and the queue views; nothing reassigns
+  them on its own. What the customer is told was passed on is
+  generated from the packet itself, element by element — an
+  incomplete packet produces a shorter line, never a false one.
 - **Signals** — frustration, effort, progress and confusion are
   computed per turn from the conversation's own records (a
   governed lexicon, counted effort components, a repeat-overlap
@@ -493,7 +511,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1376/1376 assertions, 1042/1042 zero-tolerance. The
+the tree: 1422/1422 assertions, 1085/1085 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -503,7 +521,7 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (351 tests) covers the deterministic core —
+The pytest suite (364 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, the retention flow (the case record, the one
@@ -512,7 +530,11 @@ cycle-end cancellation), care records and the mining pass, failure
 attribution and the annotation queue, the confirmation
 re-ask regressions, the prompt registry and its lint,
 continuity (the briefing's traceability to its records, the
-promises ledger's due states, the adopted procedure run), store
+promises ledger's due states, the adopted procedure run),
+handoff quality (the completeness grade per escalation class,
+acceptance stamped and singular, the overdue read by the
+shared clock, the digest naming both, the transfer line held
+to the packet), store
 conformance across the SQLite and in-memory profiles (the
 PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
@@ -573,6 +595,10 @@ src/cx_agent/
                    flags, last outcome, the resumable run), and
                    the promises ledger: due states derived from
                    the commitment records + the shared clock
+  handoffs.py      handoff quality: the completeness grade per
+                   escalation class, the customer line generated
+                   from the packet, acceptance as a recorded act,
+                   the unaccepted-and-overdue read
   prompts.py       the prompt registry: every governed text as
                    versioned data (compose + intent prompts, the
                    explanation forms, the policy corpus), the
@@ -595,7 +621,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (105 trajectories) + personas.py
+evals/             scenarios.jsonl (110 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite

@@ -1173,17 +1173,72 @@ empty even after the booking executed — `settle_callback`
 now stamps the verified conversation's account onto the
 record when it settles, and the ledger reads it from there.
 
+## Handoff quality
+
+Rounds 1–16 built the handoff packet and kept enriching what
+it carries. Round 17 grades it, records its pickup, and holds
+the customer-facing line about it to what it actually holds.
+
+**The grade.** `handoffs.grade_packet` runs at the one place
+packets are built (`escalation.build_packet`) and in the
+complaint watch, so every route to the queue is graded by the
+same rules. The packet's class derives from its escalation
+reason — immediate (threat, fraud, legal), identity, care,
+watch (the complaint SLA queue entries), standard (everything
+else) — and each class is held to the elements it can honestly
+carry: identity state and attempts, the issue in the
+customer's own words, the vulnerability determination, the
+signal summary (not required of the watch's entries — no live
+conversation), what was tried (standard only — the classes
+that leave by design are not graded on history they cannot
+have), the figures (any billing case, by intent or queue),
+and the account's open promises and complaints from the
+round 16 ledger (any class but immediate, once the account is
+known; `open_state_known` separates "none open" from "never
+computed"). Missing elements are named on the packet, ride
+the escalation's audit event, and surface in the daily
+digest's handoffs section. The grade never blocks the
+transfer: a customer who needs a person gets a person, and
+the gap is the human's information, not the customer's wait.
+
+**Acceptance.** An `Escalation` now carries `created_date`
+(the shared clock's day) and, once picked up,
+`accepted_by` / `accepted_date`. Acceptance is a recorded
+act through one code path (`handoffs.accept_handoff`) behind
+the API (`POST /escalations/{id}/accept`), the console's
+Accept button, and the CLI (`cx-agent accept-handoff`); it is
+singular — a second acceptance is refused, so who took the
+case never rewrites itself. `handoffs.unaccepted_overdue`
+names the handoffs unaccepted past
+`Policy.handoff_acceptance_days`: it feeds the digest (a
+day-end state of the whole book, like the complaints and
+promises sections), `GET /escalations`, the CLI listing, and
+the console. Nothing reassigns or escalates an overdue
+handoff on its own — the surfacing is the mechanism.
+
+**The line.** The escalation reply is composed in code, and
+its account of what was passed on is now generated from the
+packet (`handoffs.continuity_line`): each clause — the steps
+tried, the amounts involved, the known fault discussed, what
+is still open — is included only when the packet holds that
+element. The round 1 wording claimed "everything we've
+covered" unconditionally; that claim is gone, and the eval
+gate holds the line to the packet in both directions
+(reply_contains for a complete packet's clauses,
+reply_not_contains where an element is absent, graded
+zero-tolerance).
+
 ## Round map
 
-This document describes rounds 1–16 (core; rerouting and
+This document describes rounds 1–17 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
 pass; the prompt registry and its lint; the retention flow;
-known-issue awareness; continuity).
-The scheduled deepening — handoff scoring, cost budgets — is
+known-issue awareness; continuity; handoff quality).
+The scheduled deepening — cost budgets — is
 laid out in the blueprint backlog; the
 architecture above is shaped so each lands as a new node,
 desk behavior, or report over the same records, not as a
