@@ -26,9 +26,9 @@ built, against the elements its class of escalation requires:
   the case is a billing case, by intent or by queue, whichever
   door it leaves by.
 - open_promises — the account's open promises and complaints,
-  read from the round 16 ledger. Required when the account is
-  known and the handoff continues the service (standard, care,
-  watch): the human inherits the commitments too.
+  read from the round 16 ledger. Required whenever the account
+  is known and the handoff is not an immediate routing: the
+  human inherits the commitments too.
 
 A packet missing a required element is INCOMPLETE, with the
 gaps named on the packet, in the escalation's audit event, and
@@ -102,7 +102,7 @@ def grade_packet(packet: HandoffPacket, intent: str = "") -> HandoffPacket:
     if (intent == "billing" or packet.queue == "billing") \
             and not packet.figures:
         missing.append("figures")
-    if packet.account_number and cls in ("standard", "care", "watch") \
+    if packet.account_number and cls != "immediate" \
             and not packet.open_state_known:
         missing.append("open_promises")
     packet.missing = missing
