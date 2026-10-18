@@ -281,8 +281,10 @@ the day's closed conversations — volume by entry desk and
 outcome, the cause mix with designed escalations counted
 apart, the signal aggregates (average effort, how often
 frustration rose, what the offers of a person did), the
-complaint book's SLA state at day end, the day's top
-unhandled-intent candidates, and escalation counts by reason.
+complaint book's SLA state at day end, the promises ledger's
+state at day end with broken promises listed in full, the
+day's top unhandled-intent candidates, and escalation counts
+by reason.
 Every figure is derived from the day's records in code; the
 digest is a snapshot, and re-running the pass for a date
 replaces it — the new digest's version number records that it
@@ -312,6 +314,52 @@ that day. The pass runs attribution first, which means a
 digest run for today is complete; a conversation that merely
 stopped joins the day an operator attributes it. And the
 digest informs humans — nothing anywhere acts on it.
+
+## Coming back
+
+A returning customer should never have to start over, and the
+agent should never have to guess what happened last time. The
+moment identity verifies, the supervisor computes a
+**continuity briefing** from the account's records — in code,
+never from a model's memory of the last chat: the open items
+with their deadlines (a complaint still open and the date its
+response is due, a dispute in flight, an arrangement's next
+instalment, a technician callback on the book), the standing
+flags (the accessibility note and contact preference, honoured
+from the first turn; the vulnerability flag, carried for the
+humans), the last conversation's outcome in one line, and
+anything left mid-flight. The briefing's lines open the reply —
+"I can see your complaint from Tuesday is still open, and
+we're due to respond by Friday" — and every element of it
+names the record it came from; a test walks the briefing and
+resolves each element to its record, so an opening can never
+claim an item that isn't on the book. An account with no
+history gets an empty briefing and an ordinary opening:
+continuity is computed, never fabricated.
+
+The commitments behind those items stand as a **promises
+ledger** (`cx-agent promises`, `GET /promises`, the console's
+ledger panel): every complaint response deadline, booked
+callback and arrangement instalment, with a due state derived
+from its record and the shared clock — kept, pending, or
+broken (a callback made is kept; a deadline passed with the
+item still open is broken). The ledger is a read over the
+records, not a second store, so it cannot drift from the books
+it summarises. Broken promises surface three ways: in the next
+conversation's briefing, in the daily digest — listed in full
+at day end — and on the ledger views. Nothing anywhere
+auto-apologises or auto-compensates for one: a person sees it
+and decides.
+
+Continuity crosses conversations, not just contacts. A
+conversation that ends mid-procedure leaves its run active on
+the store; the next conversation for the account adopts that
+run at verification — rebound to the new conversation, its
+history intact — and the walk continues from the step it
+stopped at instead of starting over. A proposal left
+unconfirmed is named from its record ("you had this waiting
+for a decision") but never carried over: acting on it still
+takes a fresh proposal from live figures and a fresh yes.
 
 ## Every word is versioned
 
@@ -429,7 +477,7 @@ CX agents fail in behavior, not in unit tests, so the gate is
 behavioral: **147 scripted multi-turn conversations** played
 against the real service, graded with pass/fail rubric
 assertions — escalation, education, grounding, transaction,
-identity, care, attribution, signals, retention. Ninety-five are hand-written persona trajectories
+identity, care, attribution, signals, retention, continuity. Ninety-five are hand-written persona trajectories
 (the refund seeker, the human-demander, the fragment writer, the
 AI skeptic, the confused elder, non-native phrasing). Thirty-five
 more are the **persona matrix**: seven difficult-customer
@@ -445,7 +493,7 @@ zero-tolerance assertions** (escalation decisions, whether an
 action executed, exact money and identity state), **≥95%
 overall**, and a clean adversarial set; the report breaks down
 by rubric, by persona, and by attack class. Current state of
-the tree: 1341/1341 assertions, 1019/1019 zero-tolerance. The
+the tree: 1376/1376 assertions, 1042/1042 zero-tolerance. The
 matrix found a real defect on its first run — a hesitant
 "um, yes I think so" silently destroyed pending decisions at
 two decision points; both now re-ask instead, and the matrix
@@ -455,14 +503,16 @@ is the regression proof.
 make evals   # writes evals/results.json
 ```
 
-The pytest suite (328 tests) covers the deterministic core —
+The pytest suite (351 tests) covers the deterministic core —
 identity machine, escalation rules, money math, action gates,
 routing, rerouting and clarification, billing depth, plan-change
 transactions, the retention flow (the case record, the one
 policy-bound save offer, the no-dark-pattern rules, the
 cycle-end cancellation), care records and the mining pass, failure
 attribution and the annotation queue, the confirmation
-re-ask regressions, the prompt registry and its lint, store
+re-ask regressions, the prompt registry and its lint,
+continuity (the briefing's traceability to its records, the
+promises ledger's due states, the adopted procedure run), store
 conformance across the SQLite and in-memory profiles (the
 PostgreSQL leg runs when
 `CX_TEST_DATABASE_URL` names a scratch database).
@@ -518,6 +568,11 @@ src/cx_agent/
                    from a day's records, the regression
                    spot-check against the committed baseline,
                    the trend view, the markdown rendering
+  continuity.py    the continuity briefing computed from the
+                   account's records at verification (open items,
+                   flags, last outcome, the resumable run), and
+                   the promises ledger: due states derived from
+                   the commitment records + the shared clock
   prompts.py       the prompt registry: every governed text as
                    versioned data (compose + intent prompts, the
                    explanation forms, the policy corpus), the
@@ -540,7 +595,7 @@ src/cx_agent/
   api.py           FastAPI surface + console
   static/console.html  the single-file operator console
 migrations/        numbered SQL migrations (PostgreSQL + SQLite)
-evals/             scenarios.jsonl (101 trajectories) + personas.py
+evals/             scenarios.jsonl (105 trajectories) + personas.py
                    (the 35-scenario matrix) + adversarial.jsonl
                    (11 attacks) + run_evals.py
 tests/             the pytest suite

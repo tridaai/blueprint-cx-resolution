@@ -865,7 +865,9 @@ over the day's signal records with `signals.signal_report`'s
 own counting rules, so the digest and the standing report
 cannot disagree; the complaint book read at day end through
 `care_book.complaint_sla_state` with the digest date as the
-reading date; the mining pass scoped to the day's conversation
+reading date; the promises ledger read as of day end (round
+16 — broken promises listed in full in the digest's promises
+section); the mining pass scoped to the day's conversation
 set (an additive scope parameter — the standalone report still
 mines the whole store); escalations counted by reason over the
 day's conversations.
@@ -1091,18 +1093,98 @@ worth more: when the operator knows, the customer is told —
 in the operator's words — and their effort stops being spent
 re-proving a known fault.
 
+## Continuity
+
+Everything above treats a conversation as the unit of work.
+Round 16 treats the **account** as the unit of memory: what a
+customer is owed, what was left unfinished, and what happened
+last time are records, and the next conversation opens from
+them — computed in code at the moment identity verifies,
+never recalled by a model.
+
+**The briefing.** `_attach_continuity` runs on the identity
+node's verified branch — the one choke point every verified
+conversation passes — and `continuity.build_briefing` reads
+the account's records into a `ContinuityBriefing`: the open
+items (complaints still open with their `response_due`,
+disputes in `opened` / `escalated_above_cap`, booked
+callbacks, arrangements not completed with their next unpaid
+instalment), the standing flags (the account's accessibility
+note and contact preference; the customer's vulnerability
+flag, carried in the briefing's data for the humans — it is
+not announced to the customer), the last conversation's
+outcome in one line (its attribution record when the daily
+pass has run, else the conversation's own closing state), a
+proposal still standing unconfirmed, and any active
+procedure run another conversation left behind. Every element
+carries the id of its record (`ref_id` / `source_id`); the
+traceability test resolves each one through the store, so a
+briefing element without a backing record fails the suite.
+The opening lines are composed in code from those elements
+and delivered at the first compose after verification,
+prepended to the turn's must-include lines — the supervisor's
+existing verbatim guarantee carries them into the reply, once.
+An account with no records produces an empty briefing and an
+ordinary opening; the eval gate holds a negative-control
+trajectory on exactly that.
+
+**The promises ledger.** Commitments get the same treatment
+as complaints did in round 8: first-class, dated, and read by
+a watch. The ledger (`continuity.promise_ledger`) is a
+**derivation, not a table** — the complaint watch's "watch as
+a read" discipline — so it can never disagree with the books
+it summarises. Three sources: a complaint's response deadline
+(kept when the complaint is responded or closed, broken when
+its date passes with it still open, pending otherwise); a
+booked technician callback (kept — a callback made is kept;
+a booking blocked at execution is broken; a proposal never
+answered, or declined, made no promise the system can break);
+and each arrangement instalment (kept when covered, broken
+when its date passes short). States derive from the records
+plus the shared clock, and the read is date-parameterised so
+the daily digest can state the ledger **as of day end**.
+Broken promises surface in exactly three places — the next
+conversation's briefing, the digest's promises section
+(listed in full), and the ledger views (`GET /promises`,
+`GET /conversations/{id}/continuity`, `cx-agent promises`,
+the console panel) — and nothing acts on them: no automatic
+apology, no compensation. A person reads them and decides.
+
+**Resuming across conversations.** Procedure runs were
+records from round 4; round 16 wires the cross-conversation
+path. When the briefing finds an active run belonging to
+another conversation, the supervisor **adopts** it at
+verification: the run's `conversation_id` is rebound, the new
+conversation's technical state points at it, and the adoption
+is audited. The desk's existing logic then continues the
+stored run — the same step, the same history — rather than
+starting a fresh walk, and the eval grades exactly that: one
+run on the account, bound to the new conversation, its
+history spanning both. A pending proposal is treated more
+strictly: it is **named** from its records (the conversation
+still holds it and its action record still stands proposed —
+the supervisor's own retire matching) but never carried
+over, because acting on it must still pass the round 2 / 5
+discipline: a fresh proposal priced from live state, and a
+fresh yes. One record defect the round repaired on the way:
+a callback record is created at a procedure's dead-end, which
+can precede identification, so its `account_number` stood
+empty even after the booking executed — `settle_callback`
+now stamps the verified conversation's account onto the
+record when it settles, and the ledger reads it from there.
+
 ## Round map
 
-This document describes rounds 1–15 (core; rerouting and
+This document describes rounds 1–16 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
 adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
 pass; the prompt registry and its lint; the retention flow;
-known-issue awareness).
-The scheduled deepening — continuity,
-handoff scoring, cost budgets — is laid out in the blueprint backlog; the
+known-issue awareness; continuity).
+The scheduled deepening — handoff scoring, cost budgets — is
+laid out in the blueprint backlog; the
 architecture above is shaped so each lands as a new node,
 desk behavior, or report over the same records, not as a
 rewrite.
