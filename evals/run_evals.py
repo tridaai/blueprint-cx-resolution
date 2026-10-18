@@ -54,8 +54,9 @@ sys.path.insert(0, str(ROOT / "src"))
 
 os.environ.setdefault("CX_TODAY", "2026-10-01")
 
-from cx_agent import attribution, care_book, handoffs, mining  # noqa: E402
+from cx_agent import attribution, care_book, costs, handoffs, mining  # noqa: E402
 from cx_agent import payments_book  # noqa: E402
+from cx_agent.llm import ModelTimeoutError  # noqa: E402
 from cx_agent.identity import expected_code  # noqa: E402
 from cx_agent.service import ConversationService  # noqa: E402
 from cx_agent.store import InMemoryStore  # noqa: E402
@@ -143,7 +144,12 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # the grade failed to name, or an overdue handoff the
            # surfacing missed, is exact or failed.
            "packet_complete", "packet_missing", "packet_class",
-           "unaccepted_overdue_count", "accepted_count"}
+           "unaccepted_overdue_count", "accepted_count",
+           # Round 18: a conversation's recorded spend is record
+           # state — the call records reconcile exactly (calls
+           # made, decision calls, tokens), or the accounting is
+           # decoration.
+           "cost_calls", "cost_decision_calls", "cost_tokens"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -432,6 +438,17 @@ def check_final(service, scenario: dict, conv_id: str,
         f"{i['kind']}:{i['outcome']}"
         for i in (packet.signals.get("interventions", [])
                   if packet else [])]
+    # Round 18: the conversation's recorded spend, folded from
+    # its model-call records by the operators' own fold — the
+    # reconciliation is the grade: these numbers are the record
+    # sums, nothing else.
+    usage = costs.conversation_usage(store, conv_id)
+    values["cost_calls"] = usage["calls"]
+    values["cost_decision_calls"] = usage["decision_calls"]
+    values["cost_advisory_calls"] = usage["advisory_calls"]
+    values["cost_tokens"] = usage["tokens"]
+    values["cost_tokens_estimated"] = usage["tokens_estimated"]
+    values["cost_tokens_measured"] = usage["tokens_measured"]
     for key, want in final.items():
         total += 1
         is_zt = scenario_zt or key in ZT_KEYS
@@ -456,12 +473,46 @@ def check_final(service, scenario: dict, conv_id: str,
     return passed, total, zt_passed, zt_total
 
 
+class _SimulatedTimeoutLLM:
+    """Eval-only test double: a model boundary whose decision
+    call — and its one governed retry — has timed out.
+    draft_reply raises ModelTimeoutError exactly as LiveLLM does
+    once its retry is spent. Labelled, and confined to this
+    runner: the offline backend never times out, and production
+    code never sees this class."""
+
+    backend = "simulated-timeout"
+
+    def draft_reply(self, ctx):
+        raise ModelTimeoutError("simulated double timeout (eval double)")
+
+    def intent_hint(self, text):
+        return None
+
+
 def apply_poke(service, poke: dict) -> None:
     """Move the world under a live conversation, before the turn's
     message posts: set fields on an account (a payment landing
     through another channel changes the balance the same way), or
     age every action record by whole days (time passing)."""
     store = service.store
+    if poke.get("set_policy"):
+        # The operator tightens a governed value between contacts
+        # (a deployment change): the service, the supervisor and
+        # the specialists' context — which hold the same Policy
+        # object by reference — all read the replacement.
+        from dataclasses import replace
+
+        new_policy = replace(service.policy, **poke["set_policy"])
+        service.policy = new_policy
+        service.supervisor.policy = new_policy
+        service.supervisor.ctx.policy = new_policy
+    if poke.get("simulate_model_timeouts"):
+        # From the next turn, the model boundary is the eval
+        # double above: every decision call times out twice, and
+        # the supervisor must close the turn to a person.
+        service.llm = _SimulatedTimeoutLLM()
+        service.supervisor.llm = service.llm
     days = int(poke.get("age_actions_days", 0))
     if days:
         for record in store.list_actions():
