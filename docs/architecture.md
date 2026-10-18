@@ -1404,7 +1404,7 @@ which is what makes the rendering safe to be a view.
 
 ## Round map
 
-This document describes rounds 1–19 (core; rerouting and
+This document describes rounds 1–20 (core; rerouting and
 clarification; billing depth; the troubleshooting engine;
 plan-change transactions; roaming depth; payments depth;
 customer care depth and unhandled-intent mining; persona and
@@ -1412,8 +1412,26 @@ adversarial eval expansion; failure attribution and the
 annotation queue; conversation signals; the daily quality
 pass; the prompt registry and its lint; the retention flow;
 known-issue awareness; continuity; handoff quality; cost &
-latency discipline; channel discipline).
-The remaining scheduled deepening — release hardening — is
-laid out in the blueprint backlog; the architecture above is
-shaped so each lands as a new node, desk behavior, or report
-over the same records, not as a rewrite.
+latency discipline; channel discipline; release hardening).
+
+Round 20 added no behavior. It stood the production store up
+for real — PostgreSQL 16.15 with pgvector 0.8.7, the
+conformance legs that had been env-gated and skipped since
+round 3 — and fixed what the first live run found, in the
+order it found it: the Postgres migration runner's
+applied-check never translated its `?` placeholders into
+psycopg's `%s`, so a Postgres store could not even finish
+migrating; the shared payload reads assumed SQLite's JSON
+text where PostgreSQL's JSONB columns return parsed dicts;
+and two conformance tests asserted virgin-store list
+contents that a shared scratch database — unlike the
+per-test tmp stores the other legs get — never gave them, so
+the PostgreSQL leg now wipes its scratch database per test.
+With those fixed the full suite is green on both profiles
+(396 passed + 12 skipped on SQLite; 408 passed, no skips,
+with the PostgreSQL leg live), the eval gate holds at
+1530/1530 assertions with 1193/1193 zero-tolerance, and the
+production profile passed a boot smoke against a fresh
+database: seed, readiness green on the Postgres store, one
+conversation served over HTTP and read back out of the
+database. All of it verified on 2026-10-18.

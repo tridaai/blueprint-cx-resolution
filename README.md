@@ -589,9 +589,14 @@ by rule, the subject screened and filed, the email rendering's
 plain text and its protected cut, the spoken form's spelled
 figures and pointer line, the same dispute landing identically
 on all three channels), store
-conformance across the SQLite and in-memory profiles (the
-PostgreSQL leg runs when
-`CX_TEST_DATABASE_URL` names a scratch database).
+conformance across all three store profiles — the
+PostgreSQL leg runs when `CX_TEST_DATABASE_URL` names a
+scratch database, and on 2026-10-18 it ran green end to end
+against PostgreSQL 16.15 with pgvector 0.8.7: 408 tests, no
+skips. Its first live run found real defects (a migration
+check that never reached the database, payload reads that
+assumed SQLite's wire shape); the fixes are in `store.py`
+and the round map in `docs/architecture.md` tells the story.
 
 ## Layout
 
@@ -702,10 +707,12 @@ into the records themselves.
   per account so tests and evals can verify the flow. A production
   deployment sends a real code over SMS/email and stores only its
   hash — the state machine around it does not change.
-- Specialists are still on their happy paths in places.
-  The later deepening — continuity across conversations,
-  handoff scoring — is still to come (see the round map in
-  `docs/architecture.md`). Incident matching is deterministic
+- The desks are deep on the paths the book covers — billing,
+  troubleshooting, plan changes, roaming, payments, care,
+  retention — but the book is finite: a need outside the
+  seeded procedures, policies and offers is an unhandled
+  intent by design, logged and mined rather than improvised.
+  Incident matching is deterministic
   and bounded by the incidents' declared signals: a report
   worded outside them follows the normal troubleshooting
   path, and the agent has no incident intelligence beyond the
@@ -716,8 +723,9 @@ into the records themselves.
   free-form customer language the way a model does. Routing and
   step classification are closed-vocabulary code and behave the
   same in both modes.
-- Transcript export to S3 is the only object-storage write in this
-  round; attachments and document intake are later work.
+- Transcript export to S3 is the only object-storage write;
+  there is no attachment or document intake — everything the
+  agent knows arrives as conversation text or a record.
 
 ## License
 
