@@ -267,7 +267,12 @@ def test_registry_round_trip_on_every_store(kind, tmp_path):
               "sqlite": SqliteStore(tmp_path / "cx.db")}
     dsn = os.environ.get("CX_TEST_DATABASE_URL")
     if dsn:
-        stores["postgres"] = PostgresStore(dsn)
+        # The PostgreSQL leg shares one scratch database across the
+        # suite; wipe it so this test's version counts start from the
+        # seed alone (same helper as the store conformance file).
+        from test_store_conformance import _fresh_postgres
+
+        stores["postgres"] = _fresh_postgres(dsn)
     if kind not in stores:
         pytest.skip("CX_TEST_DATABASE_URL not set")
     store = stores[kind]

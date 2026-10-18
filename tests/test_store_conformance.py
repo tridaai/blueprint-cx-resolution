@@ -20,12 +20,32 @@ from cx_agent.store import (
 )
 
 
+def _fresh_postgres(dsn):
+    """A PostgresStore on a wiped scratch database. The memory and
+    SQLite legs get a virgin store per test from tmp_path; the
+    PostgreSQL leg shares one named scratch database, so without a
+    wipe one test's seed book would leak into the next test's
+    exact-list assertions (round 20 found the roaming-rate and
+    procedure lists polluted by an earlier test's seed)."""
+    store = PostgresStore(dsn)  # connecting runs the migrations
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' "
+            "AND tablename <> 'schema_migrations'").fetchall()
+        if rows:
+            conn.execute("TRUNCATE " + ", ".join(
+                f'"{r[0]}"' for r in rows) + " CASCADE")
+    return store
+
+
 def _stores(tmp_path):
     yield "memory", InMemoryStore()
     yield "sqlite", SqliteStore(tmp_path / "cx.db")
     dsn = os.environ.get("CX_TEST_DATABASE_URL")
     if dsn:
-        yield "postgres", PostgresStore(dsn)
+        yield "postgres", _fresh_postgres(dsn)
 
 
 @pytest.mark.parametrize("kind", ["memory", "sqlite", "postgres"])
