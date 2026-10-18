@@ -132,7 +132,8 @@ def test_the_call_cap_closes_the_next_turn_gracefully():
     # the report counts the closing, and the conversation stays closed
     assert svc.cost_report()["budget_exhaustions"] == 1
     after = svc.post_message(cid, "hello?")
-    assert after.outcome == "already_escalated"
+    assert after.escalated is True
+    assert after.escalation_reason == "already_escalated"
 
 
 def test_the_token_cap_closes_the_next_turn_too():
