@@ -30,9 +30,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import continuity
+from . import handoffs
 from . import incidents as incidents_mod
 from . import signals as signals_mod
 from .config import Policy
+from .money import fmt
 from .models import Conversation, HandoffPacket
 from .screening import Screening
 
@@ -85,6 +88,11 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
                 if a.status in ("proposed", "declined", "blocked")]
     last_customer = next(
         (m.text for m in reversed(conv.messages) if m.role == "customer"), "")
+    # The issue in the customer's own words (round 17): their
+    # first message — the problem as they stated it, before the
+    # conversation reframed it.
+    first_customer = next(
+        (m.text for m in conv.messages if m.role == "customer"), "")
     open_items: list[str] = []
     if conv.pending_action is not None:
         open_items.append(f"Unconfirmed action: {conv.pending_action.summary}")
@@ -134,11 +142,60 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
             f"Known issue {known['incident_id']}: {known['title']} "
             f"({known['status']}) — acknowledged to the customer "
             f"from the incident record.")
-    return HandoffPacket(
+    # What was tried, at continuation level (round 17): the
+    # procedure walks' steps with their outcomes, the dispute
+    # lines as they were decided, and the actions attempted —
+    # grouped by the record they came from, each line traceable
+    # to it. A walk that was only opened contributes nothing:
+    # nothing was tried yet, and the grade will say so.
+    tried: list[str] = []
+    for run in store.list_procedure_runs(conv.conversation_id):
+        for step in run.history:
+            tried.append(
+                f"{run.procedure_id} step {step.step_id}: "
+                f"{step.result or step.detail}")
+        if run.outcome and run.state != "active":
+            tried.append(f"{run.procedure_id}: {run.outcome}")
+    cases = store.list_dispute_cases(conversation_id=conv.conversation_id)
+    for case in cases:
+        for line in case.lines:
+            if line.decision:
+                tried.append(
+                    f"Dispute {case.case_id}: {line.description} "
+                    f"— {line.decision}")
+    tried += attempts
+    # The figures the case turns on (round 17): action amounts
+    # and disputed charges, each named with its record.
+    figures: list[str] = []
+    for a in actions:
+        if a.amount is not None:
+            figures.append(f"{a.kind.value} {fmt(a.amount)} ({a.status})")
+    for case in cases:
+        for line in case.lines:
+            figures.append(
+                f"Disputed: {line.description} — {fmt(line.disputed_amount)} "
+                f"of {fmt(line.amount)} billed (dispute {case.case_id})")
+    figures = list(dict.fromkeys(figures))
+    # The account's open promises and complaints (round 17),
+    # from the round 16 ledger: the human inherits the
+    # commitments too. Computable only once the account is
+    # known — `open_state_known` records which case this is,
+    # so an empty list is never mistaken for "none open".
+    open_promises: list[str] = []
+    open_state_known = bool(conv.account_number)
+    if conv.account_number:
+        for entry in continuity.promise_ledger(store, conv.account_number):
+            if entry.state in ("pending", "broken"):
+                suffix = " (overdue)" if entry.state == "broken" else ""
+                open_promises.append(
+                    f"{entry.summary} — due {entry.due_date}{suffix}")
+    packet = HandoffPacket(
         conversation_id=conv.conversation_id,
         queue=queue,
         reason=reason,
         identity_state=conv.identity_state.value,
+        identity_attempts=conv.identity_attempts,
+        issue=first_customer[:200],
         vulnerable=vulnerable,
         customer_name=customer.full_name if customer else "",
         account_number=conv.account_number or "",
@@ -146,6 +203,14 @@ def build_packet(conv: Conversation, store, reason: str, queue: str) -> HandoffP
         attempts=attempts,
         actions_taken=taken,
         open_items=open_items,
+        tried=tried,
+        figures=figures,
+        open_promises=open_promises,
+        open_state_known=open_state_known,
         signals=sig_summary,
         known_incidents=known_incidents,
     )
+    # The completeness grade (round 17): computed here, at the
+    # one place packets are built, so every route to the queue
+    # is graded by the same rules.
+    return handoffs.grade_packet(packet, conv.intent.value)

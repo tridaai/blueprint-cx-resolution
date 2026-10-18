@@ -131,6 +131,12 @@ class Policy:
     # unhandled-intent candidates.
     daily_spot_check_modulus: int = 4
     daily_mining_top: int = 3
+    # Handoff acceptance (round 17): a handoff nobody has picked
+    # up within this many days of its raising is overdue — the
+    # digest and the queue views name it, so an escalation that
+    # fell on the floor is visible. Nothing acts on it: no
+    # reassignment, no alert — a person reads and decides.
+    handoff_acceptance_days: int = 1
 
     @classmethod
     def from_env(cls) -> "Policy":
@@ -192,6 +198,8 @@ class Policy:
                 "CX_DAILY_SPOT_CHECK_MODULUS", base.daily_spot_check_modulus),
             daily_mining_top=num(
                 "CX_DAILY_MINING_TOP", base.daily_mining_top),
+            handoff_acceptance_days=num(
+                "CX_HANDOFF_ACCEPTANCE_DAYS", base.handoff_acceptance_days),
         )
 
 

@@ -713,6 +713,9 @@ class DailyDigest(BaseModel):
     promises: dict = {}  # the promises ledger at day end (round 16)
     mining_candidates: list = []  # top unhandled-intent candidates
     escalations_by_reason: dict = {}
+    handoffs: dict = {}  # handoff quality (round 17): the day's
+    #                      incomplete packets with their gaps named,
+    #                      and the book's unaccepted, overdue queue
     spot_check: dict = {}  # the regression spot-check's findings
 
 
@@ -796,6 +799,15 @@ class HandoffPacket(BaseModel):
     queue: str  # general | billing | fraud | vulnerable_care
     reason: str
     identity_state: str
+    # How many verification attempts the customer spent getting
+    # here (round 17): the state alone does not say whether the
+    # human inherits a fresh case or a customer who has already
+    # failed three codes.
+    identity_attempts: int = 0
+    # The issue in the customer's own words (round 17): their
+    # first message, verbatim — the human reads what the customer
+    # actually said the problem was, not a paraphrase.
+    issue: str = ""
     # The account carries a vulnerability flag (seeded, or set from
     # the customer's own plainly stated circumstances in this
     # conversation) — the human sees it without digging.
@@ -806,6 +818,31 @@ class HandoffPacket(BaseModel):
     attempts: list[str] = Field(default_factory=list)
     actions_taken: list[str] = Field(default_factory=list)
     open_items: list[str] = Field(default_factory=list)
+    # What was tried, at the level the human continues from
+    # (round 17): procedure steps with their outcomes, dispute
+    # lines as they were decided, attempted actions — each line
+    # from a record, in the order they happened.
+    tried: list[str] = Field(default_factory=list)
+    # The money the case turns on (round 17): action amounts and
+    # disputed figures, each named with its record — the human
+    # never has to re-derive what is at stake.
+    figures: list[str] = Field(default_factory=list)
+    # The account's open promises and complaints at handoff
+    # (round 17), read from the round 16 promises ledger:
+    # pending and broken commitments, oldest first. Empty can
+    # mean "none open" or "never computed" — `open_state_known`
+    # is the difference, and the completeness grade reads it.
+    open_promises: list[str] = Field(default_factory=list)
+    open_state_known: bool = False
+    # The completeness grade (round 17), computed in code by
+    # handoffs.grade_packet at the moment of handoff: which class
+    # of escalation this is, and which of the elements its class
+    # requires are missing. An incomplete packet still transfers
+    # the customer — the grade names the gap for the human and
+    # the daily digest; it never blocks the transfer.
+    handoff_class: str = ""
+    complete: bool = True
+    missing: list[str] = Field(default_factory=list)
     # The customer's experience of the conversation, from the
     # signal records (signals.packet_summary): effort score and
     # its components, the frustration trend, the interventions
@@ -830,6 +867,16 @@ class Escalation(BaseModel):
     queue: str
     packet: HandoffPacket
     turn: int
+    # The day the handoff was raised (round 17), by the shared
+    # clock — the age an unaccepted handoff is judged by. Empty
+    # on records written before the field existed; those cannot
+    # be aged and are never reported as overdue.
+    created_date: str = ""  # ISO date
+    # Acceptance (round 17): the receiving side is a recorded
+    # act, not an assumption — who picked the handoff up, and
+    # the day they did. Both empty until someone does.
+    accepted_by: str = ""
+    accepted_date: str = ""  # ISO date
 
 
 class Incident(BaseModel):
