@@ -29,6 +29,16 @@ offer, second explanation forms served on confusion, the signal
 summary riding the handoff packet, and a calm negative control
 that must fire nothing across its whole length.
 
+The channel trajectories (rubric "channel", zero-tolerance as
+scenarios) grade round 19: one dispute played identically over
+web chat, email and a voice transcript must land in identical
+state — same credit, same balance, same actions — while each
+channel's rendering obeys its own rules (the email subject and
+its cap, the spoken form with its spelled figures and pointer
+line). A turn's shape names its door: `say`, `email`
+({subject, body}) or `transcript`. An email subject carrying an
+injection is graded on being screened and filed, never obeyed.
+
 Run:  uv run python evals/run_evals.py
 Writes evals/results.json with the full detail.
 
@@ -149,7 +159,12 @@ ZT_KEYS = {"escalated", "action_status", "balance_due", "plan_id",
            # state — the call records reconcile exactly (calls
            # made, decision calls, tokens), or the accounting is
            # decoration.
-           "cost_calls", "cost_decision_calls", "cost_tokens"}
+           "cost_calls", "cost_decision_calls", "cost_tokens",
+           # Round 19: the channel on the conversation record is
+           # record state — set at creation, never moved — and
+           # the email subject's screening verdict is an audit
+           # fact, exact or failed.
+           "conv_channel", "subject_injection_screened"}
 
 _CODE = re.compile(r"\{code:(NB-\d+)\}")
 
@@ -170,6 +185,10 @@ def check_turn(result, expect: dict, failures: list, label: str,
         "identity_state": result.identity_state,
         "action_status": result.action.status if result.action else "none",
         "action_kind": result.action.kind.value if result.action else "none",
+        # Round 19: the conversation's channel and the email
+        # subject the reply went out under.
+        "channel": result.channel,
+        "email_subject": result.email_subject,
     }
     for key, want in expect.items():
         total += 1
@@ -179,6 +198,29 @@ def check_turn(result, expect: dict, failures: list, label: str,
         if key == "reply_contains":
             ok = want in result.reply
             got = f"reply lacks {want!r}"
+        elif key == "rendered_contains":
+            # What the customer on this channel actually receives
+            # (round 19): the rendering, not the canonical reply.
+            ok = want in result.rendered_reply
+            got = f"rendered reply lacks {want!r}"
+        elif key == "rendered_contains_all":
+            missing = [w for w in want if w not in result.rendered_reply]
+            ok = not missing
+            got = f"rendered reply lacks {missing!r}"
+        elif key == "rendered_not_contains":
+            ok = want not in result.rendered_reply
+            got = f"rendered reply contains {want!r}"
+        elif key == "rendered_not_contains_all":
+            present = [w for w in want
+                       if w in result.rendered_reply]
+            ok = not present
+            got = f"rendered reply contains {present!r}"
+        elif key == "rendered_max_chars":
+            ok = len(result.rendered_reply) <= want
+            got = f"rendered reply is {len(result.rendered_reply)} chars"
+        elif key == "email_subject_contains":
+            ok = want in result.email_subject
+            got = f"subject lacks {want!r}"
         elif key == "reply_contains_all":
             missing = [w for w in want if w not in result.reply]
             ok = not missing
@@ -238,6 +280,17 @@ def check_final(service, scenario: dict, conv_id: str,
     values = {
         "status": conv.status if conv else None,
         "conv_account": conv.account_number if conv else None,
+        # Round 19: the channel the conversation was recorded
+        # under, and the email subjects' screening verdicts on
+        # its audit trail.
+        "conv_channel": conv.channel if conv else None,
+        "subject_injection_screened": any(
+            e.kind == "screening"
+            and e.detail.get("source") == "email_subject"
+            and e.detail.get("injection_attempt") for e in audit),
+        "subjects_screened": sum(
+            1 for e in audit if e.kind == "screening"
+            and e.detail.get("source") == "email_subject"),
         "unhandled_logged": bool(conv and conv.unhandled_intent),
         "escalation_queue": escalations[-1].queue if escalations else None,
         "reroute_count": sum(1 for e in audit if e.kind == "reroute"),
@@ -490,6 +543,26 @@ class _SimulatedTimeoutLLM:
         return None
 
 
+def play_turn(service, conversation_id: str, turn: dict):
+    """Post one scripted turn through the door its shape names:
+    a plain `say` through the message door, an `email`
+    ({subject, body}) through the email ingest, a `transcript`
+    through the voice-transcript ingest (round 19). The daily
+    pass's spot-check plays turns through this same function, so
+    a sampled channel scenario replays exactly as the gate ran
+    it."""
+    if turn.get("email") is not None:
+        email = turn["email"]
+        return service.post_email(
+            conversation_id, _substitute(email.get("subject", "")),
+            _substitute(email.get("body", "")))
+    if turn.get("transcript") is not None:
+        return service.post_transcript(
+            conversation_id, _substitute(turn["transcript"]))
+    return service.post_message(
+        conversation_id, _substitute(turn["say"]))
+
+
 def apply_poke(service, poke: dict) -> None:
     """Move the world under a live conversation, before the turn's
     message posts: set fields on an account (a payment landing
@@ -645,13 +718,13 @@ def main() -> int:
             for seed_turn in seed_conv["turns"]:
                 service.post_message(seeded.conversation_id,
                                      _substitute(seed_turn["say"]))
-        conv = service.start_conversation()
+        conv = service.start_conversation(
+            channel=scenario.get("channel") or "web_chat")
         s_passed = s_total = s_zt_passed = s_zt_total = 0
         for idx, turn in enumerate(scenario["turns"], start=1):
             if turn.get("poke"):
                 apply_poke(service, turn["poke"])
-            result = service.post_message(
-                conv.conversation_id, _substitute(turn["say"]))
+            result = play_turn(service, conv.conversation_id, turn)
             p, t, zp, zt = check_turn(
                 result, turn.get("expect") or {}, failures,
                 f"{scenario['id']} turn {idx}", scenario.get("zt", False))
