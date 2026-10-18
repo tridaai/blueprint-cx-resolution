@@ -328,16 +328,24 @@ def _dead_end(ctx, conv: Conversation, run: ProcedureRun, proc: Procedure,
 
 
 def settle_callback(store, callback_id: str, status: str,
-                    action_id: str = "") -> None:
+                    action_id: str = "",
+                    account_number: str = "") -> None:
     """Settle a callback record when its booking proposal is
     answered — booked (with the executed action's id), declined,
-    or blocked at execution — the way a dispute case settles."""
+    or blocked at execution — the way a dispute case settles.
+    The record is created at the dead-end, which can precede
+    identification; the account the (by then verified)
+    conversation belongs to is stamped here if the record
+    doesn't carry one yet, so the settled callback stands on
+    the account it was promised to (round 16)."""
     callback = store.get_callback(callback_id)
     if callback is None:
         return
     callback.status = status
     if action_id:
         callback.action_id = action_id
+    if account_number and not callback.account_number:
+        callback.account_number = account_number
     store.save_callback(callback)
 
 

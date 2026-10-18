@@ -577,6 +577,54 @@ class ComplaintRecord(BaseModel):
     sla_escalation_id: str = ""  # the watch's queue entry, once raised
 
 
+class PromiseEntry(BaseModel):
+    """One commitment on the promises ledger (round 16) — a
+    DERIVED entry, never stored: the ledger is a read over the
+    records that carry the commitment (a complaint's response
+    deadline, a booked technician callback, an arrangement
+    instalment), so it can never drift from the books it
+    summarises. `state` is derived from the backing record plus
+    the shared clock: kept (the commitment was met), pending
+    (still within its time), broken (its date passed with the
+    item still open). `source_id` is the backing record's id —
+    every entry resolves to it; there is no entry without one."""
+
+    promise_id: str  # PRM-<source id> — derived, stable per source
+    kind: str  # complaint_response | callback | arrangement_instalment
+    account_number: str
+    source_id: str  # the backing record's id
+    conversation_id: str = ""  # where the commitment was made
+    summary: str = ""
+    due_date: str = ""  # ISO date the commitment falls due
+    state: str = "pending"  # pending | kept | broken
+
+
+class ContinuityBriefing(BaseModel):
+    """What a returning customer is opened with (round 16),
+    computed in code from the account's records at the moment
+    identity verifies: the open items with their deadlines, the
+    promises already broken, the standing flags, the last
+    conversation's outcome in one line, a proposal left pending,
+    and the resumable marker a previous conversation left behind
+    (an active procedure run). Every element names the record it
+    came from (`ref_id` / `source_id`); `lines` are the
+    customer-facing opening lines composed from those elements
+    in code — the supervisor puts them in front of the reply
+    verbatim. An account with no history gets an empty briefing:
+    no lines, no opening beyond the ordinary greeting."""
+
+    account_number: str
+    open_items: list = []  # {kind, ref_id, summary, due_date}
+    broken_promises: list = []  # PromiseEntry dicts, state == broken
+    flags: dict = {}  # accessibility_note, preferred_contact, vulnerable
+    last_outcome: str = ""  # one line; "" when there is no last conversation
+    last_outcome_source: str = ""  # the conversation the line came from
+    resumable_run_id: str = ""  # an active ProcedureRun left by another conversation
+    resumable_summary: str = ""
+    pending_proposal: dict = {}  # {kind, summary, conversation_id}
+    lines: list = []  # the opening lines, in the order they're spoken
+
+
 class FeedbackRecord(BaseModel):
     """A compliment or a piece of general feedback, recorded the
     moment it's recognised — data the business mines, not
@@ -662,6 +710,7 @@ class DailyDigest(BaseModel):
     no_cause: int = 0
     signals: dict = {}  # the day's signal aggregates (round 11 measures)
     complaints: dict = {}  # SLA states at day end: open/due_soon/breached/settled
+    promises: dict = {}  # the promises ledger at day end (round 16)
     mining_candidates: list = []  # top unhandled-intent candidates
     escalations_by_reason: dict = {}
     spot_check: dict = {}  # the regression spot-check's findings

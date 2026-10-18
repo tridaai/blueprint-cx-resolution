@@ -27,6 +27,7 @@ from langgraph.graph import END, StateGraph
 
 from . import actions as action_mod
 from . import billing_book
+from . import continuity
 from . import incidents as incidents_mod
 from . import payments_book
 from . import retention_book
@@ -390,6 +391,11 @@ class Supervisor:
         if ok:
             self._audit(conv, "identity", {"event": "verified"})
             conv.specialist_state.pop("awaiting", None)
+            # Continuity (round 16): the moment identity verifies,
+            # the account's records become this conversation's
+            # opening — computed in code, adopted here, delivered
+            # at compose.
+            self._attach_continuity(conv)
             if conv.specialist_state.pop("resume_pending", False):
                 pending = conv.pending_action
                 state["result"] = SpecialistResult(
@@ -454,6 +460,48 @@ class Supervisor:
             progress=True)
         state["next"] = "post"
         return state
+
+    def _attach_continuity(self, conv: Conversation) -> None:
+        """Compute the continuity briefing for the just-verified
+        account and keep it on the conversation: the snapshot is
+        the record of what was on file, the lines are delivered
+        verbatim at the next compose, and a resumable procedure
+        run left by an earlier conversation is ADOPTED — rebound
+        to this conversation and pointed at by its technical
+        state, so the walk continues the stored run instead of
+        starting over (round 16). Runs once per conversation, at
+        verification; an account with no history gets an empty
+        briefing and an ordinary opening."""
+        if "continuity" in conv.specialist_state or not conv.account_number:
+            return
+        briefing = continuity.build_briefing(
+            self.store, conv.account_number,
+            exclude_conversation_id=conv.conversation_id)
+        adopted_run_id = ""
+        if briefing.resumable_run_id:
+            run = self.store.get_procedure_run(briefing.resumable_run_id)
+            if run is not None and run.state == "active":
+                from_conversation = run.conversation_id
+                run.conversation_id = conv.conversation_id
+                self.store.save_procedure_run(run)
+                tech = conv.specialist_state.setdefault("technical", {})
+                tech["run_id"] = run.run_id
+                tech["procedure_id"] = run.procedure_id
+                adopted_run_id = run.run_id
+                self._audit(conv, "continuity", {
+                    "event": "run_adopted", "run_id": run.run_id,
+                    "procedure_id": run.procedure_id,
+                    "from_conversation": from_conversation})
+        conv.specialist_state["continuity"] = {
+            "briefing": briefing.model_dump(mode="json"),
+            "adopted_run_id": adopted_run_id,
+            "delivered": False,
+        }
+        self._audit(conv, "continuity", {
+            "event": "briefing_computed",
+            "open_items": len(briefing.open_items),
+            "broken_promises": len(briefing.broken_promises),
+            "resumable_run_id": adopted_run_id})
 
     def _retention_case_for(self, pending):
         """The retention case a pending proposal belongs to, if
@@ -532,8 +580,9 @@ class Supervisor:
             if callback_id:
                 # The callback record settles with the answer too:
                 # the booking was offered and declined, on record.
-                procedures.settle_callback(self.store, callback_id,
-                                           "declined")
+                procedures.settle_callback(
+                    self.store, callback_id, "declined",
+                    account_number=conv.account_number or "")
             retention_case = self._retention_case_for(pending)
             if retention_case is not None \
                     and pending.payload.get("retention_save_offer"):
@@ -676,12 +725,14 @@ class Supervisor:
             # booked, with the executed action's id, or blocked at
             # the final check with nothing applied.
             if record.status == "executed":
-                procedures.settle_callback(self.store, callback_id,
-                                           "booked",
-                                           action_id=record.action_id)
+                procedures.settle_callback(
+                    self.store, callback_id, "booked",
+                    action_id=record.action_id,
+                    account_number=conv.account_number or "")
             else:
-                procedures.settle_callback(self.store, callback_id,
-                                           "blocked")
+                procedures.settle_callback(
+                    self.store, callback_id, "blocked",
+                    account_number=conv.account_number or "")
         case_id = pending.payload.get("dispute_case_id")
         if case_id:
             # The dispute case settles on the credit's outcome: the
@@ -1114,6 +1165,14 @@ class Supervisor:
         customer = (self.store.get_customer(conv.customer_id)
                     if conv.customer_id else None)
         must_include = list(result.must_include)
+        # Continuity (round 16): the briefing's opening lines go
+        # in front of the first reply composed after verification
+        # — verbatim, by the same must-include guarantee as every
+        # other governed line — and are delivered exactly once.
+        cont = conv.specialist_state.get("continuity")
+        if cont and not cont.get("delivered"):
+            must_include = list(cont["briefing"]["lines"]) + must_include
+            cont["delivered"] = True
         if state.get("first_human_ask"):
             must_include.append(
                 "If you'd still rather speak to a person after this, just ask "
