@@ -7,7 +7,10 @@ and outcome, the attribution cause mix (round 10), the signal
 aggregates (round 11), the complaint book's SLA state at day
 end (round 8), the day's top unhandled-intent candidates (the
 round 8 mining pass, scoped to the day), escalation counts by
-reason — and a regression spot-check that re-runs a
+reason, handoff quality (round 17: the day's incomplete
+packets with their gaps named, and the book's unaccepted
+handoffs past the acceptance threshold) — and a regression
+spot-check that re-runs a
 deterministic sample of the eval trajectories against the
 current build and compares them with the committed baseline.
 
@@ -62,7 +65,7 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from . import attribution, care_book, continuity, mining
+from . import attribution, care_book, continuity, handoffs, mining
 from .clock import today
 from .models import DailyDigest
 
@@ -188,6 +191,8 @@ def run_daily_pass(store, policy, on: date | None = None, *,
     resolved = (by_outcome["resolved"]
                 + by_outcome["resolved_with_action"])
 
+    handoff_section = _handoff_section(store, policy, id_set, on)
+
     report = mining.mine_unhandled_intents(
         store, policy, conversation_ids=id_set)
     candidates = [
@@ -221,9 +226,31 @@ def run_daily_pass(store, policy, on: date | None = None, *,
         promises=continuity.promise_summary(store, on),
         mining_candidates=candidates,
         escalations_by_reason=dict(sorted(escalations.items())),
+        handoffs=handoff_section,
         spot_check=spot)
     store.save_digest(digest)
     return digest
+
+
+def _handoff_section(store, policy, conversation_ids: set, on: date) -> dict:
+    """Handoff quality (round 17): the day's incomplete packets
+    with their gaps named — scoped to the day's conversations,
+    like the escalation counts — and, as a day-end state of the
+    whole book (the complaints and promises sections' pattern),
+    the handoffs nobody has picked up past the acceptance
+    threshold. The digest names both; a person acts."""
+    incomplete = [
+        {"escalation_id": e.escalation_id,
+         "conversation_id": e.conversation_id,
+         "queue": e.queue, "reason": e.reason,
+         "missing": list(e.packet.missing)}
+        for e in store.list_escalations()
+        if e.conversation_id in conversation_ids and not e.packet.complete]
+    return {
+        "incomplete": incomplete,
+        "incomplete_count": len(incomplete),
+        "unaccepted_overdue": handoffs.unaccepted_overdue(store, policy, on=on),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +553,30 @@ def render_digest_markdown(digest: DailyDigest) -> str:
 
     lines += _counts_block("Escalations by reason",
                            digest.escalations_by_reason)
+
+    # Handoffs (round 17): the day's incomplete packets with
+    # their gaps named, and the book's unaccepted queue past
+    # the threshold. The digest acts on neither — it makes
+    # both impossible to miss.
+    hf = digest.handoffs or {}
+    lines += ["## Handoffs", ""]
+    if hf.get("incomplete"):
+        for row in hf["incomplete"]:
+            lines.append(
+                f"- INCOMPLETE {row['escalation_id']} ({row['reason']}): "
+                f"missing {', '.join(row['missing'])}.")
+    else:
+        lines.append("- Every packet handed off today was complete.")
+    overdue = hf.get("unaccepted_overdue") or []
+    if overdue:
+        for row in overdue:
+            lines.append(
+                f"- UNACCEPTED {row['escalation_id']} — queue "
+                f"{row['queue']}, raised {row['created_date']}, "
+                f"{row['age_days']} day(s) without a pickup.")
+    else:
+        lines.append("- No handoff is past the acceptance threshold.")
+    lines.append("")
 
     spot = digest.spot_check
     lines += ["## Regression spot-check", ""]
