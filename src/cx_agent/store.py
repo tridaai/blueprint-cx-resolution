@@ -103,6 +103,16 @@ def dump(model) -> str:
     return json.dumps(model.model_dump(), default=_json_default)
 
 
+def _validate_payload(model_cls, raw):
+    """Rebuild a model from a stored payload. SQLite hands back the
+    JSON text `dump` wrote; PostgreSQL's JSONB columns come back
+    from psycopg already parsed into a dict — accept both, so the
+    shared read paths never assume one dialect's wire shape."""
+    if isinstance(raw, dict):
+        return model_cls.model_validate(raw)
+    return model_cls.model_validate_json(raw)
+
+
 class EmbeddingDimensionError(ValueError):
     """An embedding was offered at the wrong dimension. Raised by
     every store before anything is written, so the failure is this
@@ -663,11 +673,11 @@ class _SqlStore:
         )
         if not rows:
             return None
-        return model_cls.model_validate_json(rows[0][0])
+        return _validate_payload(model_cls, rows[0][0])
 
     def _load_all(self, table: str) -> list:
         _, model_cls = _TABLES[table]
-        return [model_cls.model_validate_json(r[0])
+        return [_validate_payload(model_cls, r[0])
                 for r in self._query(f"SELECT payload FROM {table}")]
 
     # -- protocol ------------------------------------------------------
@@ -944,7 +954,7 @@ class _SqlStore:
         rows = self._query(
             "SELECT payload FROM audit_events WHERE conversation_id = ?", (conversation_id,)
         )
-        return [AuditEvent.model_validate_json(r[0]) for r in rows]
+        return [_validate_payload(AuditEvent, r[0]) for r in rows]
 
     def count_customers(self):
         return self._query("SELECT COUNT(*) FROM customers")[0][0]
@@ -1059,6 +1069,10 @@ class PostgresStore(_SqlStore):
     def _script(self, sql, params=(), record=None):
         with self._lock:
             if params:
+                # Same placeholder translation as _execute/_query:
+                # the migration applied-check arrives in the shared
+                # "?" spelling and must reach psycopg as "%s".
+                sql = sql.replace("?", "%s")
                 return self._conn.execute(sql, params).fetchall()
             self._conn.execute(sql)
             if record:
