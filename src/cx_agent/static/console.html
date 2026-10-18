@@ -176,6 +176,20 @@ async function runWatch() {
   await refresh();
 }
 
+async function acceptHandoff(escalationId) {
+  const input = document.getElementById("acc-" + escalationId);
+  const note = document.getElementById("acc-note-" + escalationId);
+  const receiver = input.value.trim();
+  if (!receiver) { note.textContent = "Name who is picking it up first."; return; }
+  const resp = await fetch("/escalations/" + escalationId + "/accept", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({receiver: receiver})
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) { note.textContent = "Refused: " + (data.detail || resp.status); return; }
+  await refresh();
+}
+
 async function runAttribution() {
   const result = await api("/attribution/run", {method: "POST"});
   document.getElementById("attribution-note").textContent =
@@ -315,11 +329,45 @@ async function refresh() {
         '<div class="k">Attempts</div><ul>' + p.attempts.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
         '<div class="k">Actions taken</div><ul>' + p.actions_taken.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
         '<div class="k">Open items</div><ul>' + p.open_items.map(a => "<li>" + a + "</li>").join("") + '</ul>' +
+        ((p.tried && p.tried.length) ?
+          '<div class="k">What was tried</div><ul>' +
+          p.tried.map(a => "<li>" + a + "</li>").join("") + '</ul>' : "") +
+        ((p.figures && p.figures.length) ?
+          '<div class="k">Figures</div><ul>' +
+          p.figures.map(a => "<li>" + a + "</li>").join("") + '</ul>' : "") +
+        ((p.open_promises && p.open_promises.length) ?
+          '<div class="k">Open promises &amp; complaints</div><ul>' +
+          p.open_promises.map(a => "<li>" + a + "</li>").join("") + '</ul>' : "") +
         ((p.known_incidents && p.known_incidents.length) ?
           '<div class="k">Known issues matched</div><ul>' +
           p.known_incidents.map(k => "<li>" + k.incident_id + " — " + k.title +
-            " (" + k.status + "): " + k.summary + "</li>").join("") + '</ul>' : "");
+            " (" + k.status + "): " + k.summary + "</li>").join("") + '</ul>' : "") +
+        '<div class="k">Packet completeness</div><div>' +
+        (p.complete ? '<span class="chip">complete</span>'
+          : '<span class="chip red">INCOMPLETE — missing: ' +
+            (p.missing || []).join(", ") + '</span>') +
+        ' <span class="meta">(' + (p.handoff_class || "standard") + ')</span></div>' +
+        '<div class="k">Picked up</div><div>' +
+        (e.accepted_by
+          ? "Accepted by " + e.accepted_by + " on " + e.accepted_date
+          : "Not yet accepted. " +
+            '<input type="text" id="acc-' + e.escalation_id + '" placeholder="your name" size="14"> ' +
+            '<button onclick="acceptHandoff(\'' + e.escalation_id + '\')">Accept handoff</button> ' +
+            '<span class="meta" id="acc-note-' + e.escalation_id + '"></span>') +
+        '</div>';
       ebox.appendChild(div);
+    }
+    if (esc.unaccepted_overdue && esc.unaccepted_overdue.length) {
+      const warn = document.createElement("div");
+      warn.className = "esc";
+      warn.innerHTML = "<h3>Unaccepted past the threshold</h3>" +
+        '<p class="empty">These handoffs were raised and nobody has picked them up. Nothing reassigns them — a person reads this and acts.</p><ul>' +
+        esc.unaccepted_overdue.map(r => "<li>" + r.escalation_id + " — queue " +
+          r.queue + ", raised " + r.created_date + ", " + r.age_days +
+          " day(s) unaccepted" +
+          (r.complete ? "" : " · packet incomplete (missing: " +
+            r.missing.join(", ") + ")") + "</li>").join("") + '</ul>';
+      ebox.appendChild(warn);
     }
   }
   const dsp = await api("/disputes");

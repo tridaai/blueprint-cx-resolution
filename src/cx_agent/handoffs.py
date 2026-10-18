@@ -118,7 +118,7 @@ def continuity_line(packet: HandoffPacket) -> str:
     rides the packet for the human, not the reply)."""
     parts = ["your identity and verification status"]
     if packet.issue:
-        parts.append("what you told me about the issue, "
+        parts.append("what you told me about the issue "
                      "in your own words")
     if packet.tried:
         parts.append("the steps we tried and what happened")

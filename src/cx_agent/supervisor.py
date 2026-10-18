@@ -33,9 +33,11 @@ from . import payments_book
 from . import retention_book
 from . import escalation as esc_mod
 from . import explanations as expl_mod
+from . import handoffs
 from . import identity as id_mod
 from . import procedures
 from . import signals as signals_mod
+from .clock import today
 from .config import Policy
 from .llm import DraftContext
 from .prompts import (
@@ -1227,11 +1229,17 @@ class Supervisor:
             escalation_id=f"ESC-{uuid.uuid4().hex[:10]}",
             conversation_id=conv.conversation_id,
             reason=decision.reason, queue=decision.queue,
-            packet=packet, turn=conv.turns)
+            packet=packet, turn=conv.turns,
+            created_date=today().isoformat())
         self.store.save_escalation(esc)
+        # The packet's completeness grade rides the audit event
+        # (round 17): an incomplete handoff is on the record the
+        # moment it happens, not only when the digest finds it.
         self._audit(conv, "escalation",
                     {"escalation_id": esc.escalation_id, "reason": decision.reason,
-                     "queue": decision.queue})
+                     "queue": decision.queue,
+                     "packet_complete": packet.complete,
+                     "packet_missing": packet.missing})
         conv.status = "escalated"
         conv.pending_action = None
         conv.specialist_state.pop("pending_desk", None)
@@ -1244,11 +1252,15 @@ class Supervisor:
         result = state.get("result")
         if result is not None and result.findings:
             prefix = " ".join(f.text for f in result.findings) + " "
+        # The transfer line is composed here, in code — and
+        # what it tells the customer was passed on is generated
+        # from the packet itself (round 17): an element the
+        # packet lacks is never claimed, so an incomplete
+        # handoff produces a shorter line, not a false one.
         state["reply"] = (
             f"{prefix}I'm transferring you to {_QUEUE_LABEL.get(decision.queue, 'a specialist')} "
-            f"now. Your reference is {esc.escalation_id}, and I've passed on "
-            "everything we've covered — the summary, what we tried, and what's "
-            "still open — so you won't need to repeat yourself.")
+            f"now. Your reference is {esc.escalation_id}. "
+            f"{handoffs.continuity_line(packet)}")
         return state
 
     # -- finalize ----------------------------------------------------------------------

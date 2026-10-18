@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import attribution, care_book, incidents, mining, retention_book, signals
+from . import attribution, care_book, continuity, handoffs, incidents, mining
+from . import retention_book, signals
 from . import prompts as prompts_mod
+from .clock import today
 from .config import LLMConfig, Policy
 from .dataset import seed_store
 from .llm import LiveLLM, make_llm
@@ -58,6 +60,21 @@ class ConversationService:
 
     def list_escalations(self):
         return self.store.list_escalations()
+
+    # -- handoff acceptance (round 17) ----------------------------------
+
+    def accept_handoff(self, escalation_id: str, receiver: str):
+        """A person picks a handoff up: the receiver and the
+        day are stamped on the escalation record, and the act
+        is written to the conversation's audit trail (see
+        handoffs.accept_handoff)."""
+        return handoffs.accept_handoff(self.store, escalation_id, receiver)
+
+    def unaccepted_handoffs(self) -> list[dict]:
+        """The handoffs nobody has picked up past the governed
+        threshold — the queue's fallen-on-the-floor view. A
+        read: it names them, a person acts."""
+        return handoffs.unaccepted_overdue(self.store, self.policy)
 
     def list_actions(self, conversation_id: str | None = None):
         return self.store.list_actions(conversation_id)
@@ -174,12 +191,27 @@ class ConversationService:
             conv = self.store.get_conversation(record.conversation_id)
             customer = (self.store.get_customer_by_account(
                 record.account_number) if record.account_number else None)
+            # The watch's packet carries the round 17 elements
+            # it honestly can: the customer's words are the
+            # complaint itself, and the account's open promises
+            # come from the ledger — this complaint among them.
+            open_promises: list[str] = []
+            if record.account_number:
+                for entry in continuity.promise_ledger(
+                        self.store, record.account_number):
+                    if entry.state in ("pending", "broken"):
+                        suffix = (" (overdue)" if entry.state == "broken"
+                                  else "")
+                        open_promises.append(
+                            f"{entry.summary} — due {entry.due_date}{suffix}")
             packet = HandoffPacket(
                 conversation_id=record.conversation_id,
                 queue="general",
                 reason="complaint_sla_breach",
                 identity_state=(conv.identity_state.value if conv
                                 else "unverified"),
+                identity_attempts=(conv.identity_attempts if conv else 0),
+                issue=record.text[:200],
                 vulnerable=bool(customer and customer.vulnerable),
                 customer_name=customer.full_name if customer else "",
                 account_number=record.account_number,
@@ -193,13 +225,20 @@ class ConversationService:
                     f"Complaint {record.complaint_id} awaits its "
                     f"substantive response "
                     f"(deadline {record.response_due})."],
+                open_promises=open_promises,
+                open_state_known=bool(record.account_number),
             )
+            # Graded like every packet (round 17), as the watch
+            # class: no live conversation, so no signals element
+            # is required of it.
+            handoffs.grade_packet(packet, conv.intent.value if conv else "")
             esc = Escalation(
                 escalation_id=f"ESC-{uuid.uuid4().hex[:10]}",
                 conversation_id=record.conversation_id,
                 queue="general",
                 reason="complaint_sla_breach",
                 turn=conv.turns if conv else 0,
+                created_date=today().isoformat(),
                 packet=packet)
             self.store.save_escalation(esc)
             record.sla_escalation_id = esc.escalation_id

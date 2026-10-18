@@ -51,6 +51,10 @@ class MessageIn(BaseModel):
     text: str
 
 
+class HandoffAcceptIn(BaseModel):
+    receiver: str
+
+
 class AnnotationIn(BaseModel):
     conversation_id: str
     annotator: str
@@ -182,7 +186,26 @@ def export_transcript(conversation_id: str) -> dict:
 @app.get("/escalations", dependencies=[Depends(require_key)])
 def list_escalations() -> dict:
     return {"escalations": [e.model_dump(mode="json")
-                             for e in service.list_escalations()]}
+                             for e in service.list_escalations()],
+            # The queue's fallen-on-the-floor view (round 17):
+            # handoffs nobody has picked up past the governed
+            # threshold, oldest first.
+            "unaccepted_overdue": service.unaccepted_handoffs()}
+
+
+@app.post("/escalations/{escalation_id}/accept",
+          dependencies=[Depends(require_key)])
+def accept_handoff(escalation_id: str, body: HandoffAcceptIn) -> dict:
+    """A person picks a handoff up — a recorded act: the
+    receiver and the day land on the escalation, and the act
+    in the conversation's audit trail."""
+    try:
+        esc = service.accept_handoff(escalation_id, body.receiver)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such escalation")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"escalation": esc.model_dump(mode="json")}
 
 
 @app.get("/actions", dependencies=[Depends(require_key)])

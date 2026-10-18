@@ -2,7 +2,12 @@
 
     cx-agent seed            write the Northbeam book into the store
     cx-agent readiness       print the profile the app will run with
-    cx-agent escalations     list open escalations (the human queue)
+    cx-agent escalations     list open escalations (the human queue),
+                             each with its packet's completeness
+                             grade and who has picked it up; the
+                             unaccepted-and-overdue are named last
+    cx-agent accept-handoff  record a person picking a handoff up:
+        <escalation-id> <receiver>
     cx-agent complaints      list complaint records with SLA state
     cx-agent complaint-watch run the watch: raise breached complaints
     cx-agent intent-mining   the unhandled-intent mining report
@@ -65,8 +70,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if cmd == "escalations":
         for esc in service.list_escalations():
+            packet = esc.packet
+            grade = ("complete" if packet.complete
+                     else f"INCOMPLETE (missing: {', '.join(packet.missing)})")
+            pickup = (f"accepted by {esc.accepted_by} on {esc.accepted_date}"
+                      if esc.accepted_by else "not yet accepted")
             print(f"{esc.escalation_id}  queue={esc.queue}  reason={esc.reason}  "
-                  f"conv={esc.conversation_id}")
+                  f"conv={esc.conversation_id}  packet={grade}  {pickup}")
+        overdue = service.unaccepted_handoffs()
+        for row in overdue:
+            print(f"OVERDUE {row['escalation_id']}  queue={row['queue']}  "
+                  f"raised {row['created_date']}  {row['age_days']} day(s) "
+                  "unaccepted")
+        return 0
+    if cmd == "accept-handoff":
+        if len(argv) < 3:
+            print("usage: cx-agent accept-handoff <escalation-id> <receiver>")
+            return 2
+        try:
+            esc = service.accept_handoff(argv[1], argv[2])
+        except (KeyError, ValueError) as exc:
+            print(f"refused: {exc}")
+            return 1
+        print(f"{esc.escalation_id} accepted by {esc.accepted_by} "
+              f"on {esc.accepted_date}")
         return 0
     if cmd == "complaints":
         for c in service.list_complaints():
