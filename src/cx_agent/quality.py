@@ -62,7 +62,7 @@ from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from . import attribution, care_book, mining
+from . import attribution, care_book, continuity, mining
 from .clock import today
 from .models import DailyDigest
 
@@ -218,6 +218,7 @@ def run_daily_pass(store, policy, on: date | None = None, *,
         no_cause=no_cause,
         signals=_signal_section(store, conversation_ids),
         complaints=_complaint_section(store, policy, on),
+        promises=continuity.promise_summary(store, on),
         mining_candidates=candidates,
         escalations_by_reason=dict(sorted(escalations.items())),
         spot_check=spot)
@@ -496,6 +497,21 @@ def render_digest_markdown(digest: DailyDigest) -> str:
               f" {complaints.get('settled', 0)}"
               f" (of {complaints.get('total', 0)} on the book).",
               ""]
+
+    # Promises (round 16): the ledger's state at day end. Broken
+    # promises are listed in full — a person reads them here and
+    # acts; the digest itself apologises to no one and compensates
+    # no one.
+    promises = digest.promises or {}
+    lines += ["## Promises at day end", "",
+              f"- Broken {promises.get('broken_count', 0)} · pending"
+              f" {promises.get('pending_count', 0)} · kept"
+              f" {promises.get('kept_count', 0)} on the book."]
+    for entry in promises.get("broken") or []:
+        lines.append(f"- BROKEN: {entry['summary']} — due"
+                     f" {entry['due_date']}, account"
+                     f" {entry['account_number']}.")
+    lines.append("")
 
     lines += ["## Unhandled-intent candidates", ""]
     if digest.mining_candidates:

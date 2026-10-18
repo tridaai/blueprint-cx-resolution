@@ -37,6 +37,9 @@
         <incident-id> <file>
     cx-agent incident-resolve resolve an incident (it stops
         <incident-id>        matching from this act on)
+    cx-agent promises        the promises ledger: every commitment
+        [NB-####]            on the book with its derived due state
+                             (broken first) — one account, or all
 """
 
 from __future__ import annotations
@@ -321,6 +324,20 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, json.JSONDecodeError, TypeError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        return 0
+    if cmd == "promises":
+        account = argv[1] if len(argv) > 1 else None
+        entries = service.promise_ledger(account)
+        if not entries:
+            print("No promises on the book.")
+            return 0
+        for e in entries:
+            print(f"{e.promise_id}  {e.state:<8} {e.kind:<24} "
+                  f"due={e.due_date}  account={e.account_number or '-'}  "
+                  f"{e.summary}")
+        broken = sum(1 for e in entries if e.state == "broken")
+        print(f"{len(entries)} promise(s), {broken} broken — "
+              f"broken promises are for a person to act on.")
         return 0
     if cmd == "quality-trend":
         rows = service.quality_trend()

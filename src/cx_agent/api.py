@@ -245,6 +245,31 @@ def list_callbacks(conversation_id: str | None = None) -> dict:
                            for c in service.list_callbacks(conversation_id)]}
 
 
+@app.get("/promises", dependencies=[Depends(require_key)])
+def list_promises(account_number: str | None = None) -> dict:
+    """The promises ledger (round 16): every commitment on the
+    book — complaint response deadlines, booked callbacks,
+    arrangement instalments — with its derived due state. Broken
+    first. Derived from the records on each read; nothing here
+    acts on a broken promise."""
+    entries = service.promise_ledger(account_number)
+    return {"promises": [e.model_dump(mode="json") for e in entries],
+            "broken_count": sum(1 for e in entries
+                                if e.state == "broken")}
+
+
+@app.get("/conversations/{conversation_id}/continuity",
+         dependencies=[Depends(require_key)])
+def conversation_continuity(conversation_id: str) -> dict:
+    """The continuity briefing for a conversation: the snapshot
+    delivered when identity verified, or the briefing computed
+    live from the account's records."""
+    result = service.conversation_continuity(conversation_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return result
+
+
 @app.get("/callbacks/{callback_id}", dependencies=[Depends(require_key)])
 def get_callback(callback_id: str) -> dict:
     callback = service.store.get_callback(callback_id)

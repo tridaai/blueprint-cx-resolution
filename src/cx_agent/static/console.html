@@ -144,6 +144,8 @@
     <button class="ghost" onclick="runQuality()">Run today's quality pass</button>
     <div id="quality-note" class="empty" style="margin-top:6px"></div>
     <div id="quality-trend"></div>
+    <h2 style="margin-top:22px">Promises ledger</h2>
+    <div id="promises"><p class="empty">No promises on the book yet. Every commitment the system makes — a complaint's response deadline, a booked technician callback, an arrangement instalment — lands here with its due state, derived from the records and the clock. Broken promises are flagged for a person to act on; nothing here apologises or compensates automatically.</p></div>
   </section>
 </main>
 <footer>
@@ -653,6 +655,24 @@ async function refresh() {
         "</td><td>" + (r.top_cause || "—") + "</td><td>" +
         (r.avg_effort === null ? "—" : r.avg_effort) + "</td><td>" + r.drift_count +
         "</td></tr>").join("") + "</table>";
+  }
+  const pr = await api("/promises");
+  const prbox = document.getElementById("promises");
+  if (!pr.promises.length) {
+    prbox.innerHTML = '<p class="empty">No promises on the book yet. Every commitment the system makes — a complaint\'s response deadline, a booked technician callback, an arrangement instalment — lands here with its due state, derived from the records and the clock. Broken promises are flagged for a person to act on; nothing here apologises or compensates automatically.</p>';
+  } else {
+    prbox.innerHTML = '<p class="empty">' + pr.promises.length + ' promise(s) on the book · ' +
+      pr.broken_count + ' broken.</p>';
+    for (const p of pr.promises) {
+      const div = document.createElement("div");
+      div.className = "dsp";
+      div.innerHTML = '<span class="chip' + (p.state === "broken" ? " red" : "") + '">' +
+        p.state + '</span> <b>' + p.summary + '</b>' +
+        '<div class="meta">' + p.promise_id + ' · ' + p.kind + ' · account ' +
+        (p.account_number || "—") + ' · due ' + (p.due_date || "—") +
+        ' · from record ' + p.source_id + '</div>';
+      prbox.appendChild(div);
+    }
   }
 }
 

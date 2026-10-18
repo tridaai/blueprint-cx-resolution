@@ -88,6 +88,44 @@ class ConversationService:
     def list_callbacks(self, conversation_id: str | None = None):
         return self.store.list_callbacks(conversation_id)
 
+    # -- continuity (round 16) -------------------------------------
+
+    def promise_ledger(self, account_number=None):
+        """The promises ledger: every commitment on the book with
+        its derived due state (pending / kept / broken), from the
+        records — optionally for one account."""
+        from . import continuity
+
+        return continuity.promise_ledger(self.store, account_number)
+
+    def conversation_continuity(self, conversation_id):
+        """One conversation's continuity briefing: the snapshot
+        delivered at verification when there is one, otherwise
+        the briefing computed live from the account's records.
+        None when the conversation doesn't exist."""
+        conv = self.store.get_conversation(conversation_id)
+        if conv is None:
+            return None
+        stored = (conv.specialist_state.get("continuity") or {}).get(
+            "briefing")
+        if stored is not None:
+            return {"conversation_id": conversation_id,
+                    "account_number": conv.account_number,
+                    "briefing": stored, "source": "delivered"}
+        if not conv.account_number:
+            return {"conversation_id": conversation_id,
+                    "account_number": "", "briefing": None,
+                    "source": "none"}
+        from . import continuity
+
+        briefing = continuity.build_briefing(
+            self.store, conv.account_number,
+            exclude_conversation_id=conversation_id)
+        return {"conversation_id": conversation_id,
+                "account_number": conv.account_number,
+                "briefing": briefing.model_dump(mode="json"),
+                "source": "computed"}
+
     def list_procedure_runs(self, conversation_id: str | None = None):
         return self.store.list_procedure_runs(conversation_id)
 
