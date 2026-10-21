@@ -64,6 +64,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 from collections import Counter
 from datetime import date
@@ -390,7 +391,26 @@ def spot_check(policy, *, scenario_ids: list[str] | None = None,
     scenario the baseline records as fully green — the
     baseline's granularity is the scenario, and the comparison
     says so rather than pretending to per-assertion history it
-    doesn't have."""
+    doesn't have.
+
+    The runner pins the shared clock (CX_TODAY) when it loads, so
+    its scenarios see the dates their figures were written for.
+    That pin belongs to the spot-check alone: the variable is put
+    back as it was when the check ends, or every later turn in a
+    live process would run on the eval's fixed date."""
+    prior = os.environ.get("CX_TODAY")
+    try:
+        return _spot_check(policy, scenario_ids=scenario_ids,
+                           baseline_path=baseline_path)
+    finally:
+        if prior is None:
+            os.environ.pop("CX_TODAY", None)
+        else:
+            os.environ["CX_TODAY"] = prior
+
+
+def _spot_check(policy, *, scenario_ids: list[str] | None,
+                baseline_path: Path | None) -> dict:
     baseline_file = baseline_path or BASELINE_PATH
     module = _eval_module()
     scenarios = load_scenarios(module)

@@ -48,8 +48,10 @@ falls back to a prompt from memory.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from .config import LLMConfig
 from .prompts import (
@@ -146,6 +148,91 @@ def _offline_compose(ctx: DraftContext) -> str:
         refs = "; ".join(f"{doc_id} ({title})" for doc_id, title in ctx.citations)
         parts.append(f"Sources: {refs}.")
     return " ".join(parts).strip()
+
+
+# ---------------------------------------------------------------------------
+# Vetting a live draft
+# ---------------------------------------------------------------------------
+#
+# The supervisor guarantees what a reply must CONTAIN (the verbatim
+# lines, the confirmation ask, the Sources line). Vetting is the
+# other half: what a model draft may not ADD. A draft is checked
+# against the material it was given — the findings, the verbatim
+# lines and the confirmation ask, which is everything the code
+# established this turn — and refused when it states a figure that
+# material doesn't hold, repeats a number the material doesn't
+# carry (a one-time code, a postcode read back wrong), promises an
+# act the material doesn't offer, or names a channel or promise of
+# its own. A refused draft is replaced by the offline composer's
+# reply, made from the same material, so the turn still lands —
+# with nothing in it the code did not establish.
+
+_MONEY_RE = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
+_LONG_NUMBER_RE = re.compile(r"(?<!\d)\d{4,}(?!\d)")
+_PROMISE_RE = re.compile(
+    r"\b(?:i'?ll|i will|we'?ll|we will|i'?m going to|i am going to|"
+    r"let me|i'?d like to|i would like to|i can)\s+(?:\w+\s+){0,3}?"
+    r"(credit|refund|apply|process|activate|cancel|book|waive|"
+    r"reimburse|compensate|offer|remove|reverse|send)\b", re.IGNORECASE)
+# Words a draft may only use when the material uses them too.
+_FOREIGN_TERMS = ("bank account", "text message", "sms", "within 24 hours",
+                  "guarantee", "compensation")
+_PREAMBLE_RE = re.compile(
+    r"^\s*(?:here'?s|here is)\b[^\n]{0,80}?\b(?:reply|response|draft|"
+    r"message)\b[^\n]*?:\s*", re.IGNORECASE)
+_SALUTATION_RE = re.compile(
+    r"^\s*(?:dear [^\n,]{1,40}|hello there|hi there),?\s*\n", re.IGNORECASE)
+_SOURCES_RE = re.compile(r"\s*\bSources?:[^\n]*", re.IGNORECASE)
+
+
+def _amounts(text: str) -> set[Decimal]:
+    out = set()
+    for raw in _MONEY_RE.findall(text):
+        try:
+            out.add(Decimal(raw.replace(",", "")))
+        except InvalidOperation:
+            continue
+    return out
+
+
+def _tidy_draft(text: str) -> str:
+    """Strip what a model wraps around a reply: a "Here's a warm
+    reply:" preamble, a letter salutation, enclosing quotes, and any
+    Sources line of its own — the supervisor appends the true one
+    from the turn's citations."""
+    text = _PREAMBLE_RE.sub("", text.strip(), count=1)
+    text = _SALUTATION_RE.sub("", text, count=1).strip()
+    if len(text) > 1 and text[0] in "\"\u201c" and text[-1] in "\"\u201d":
+        text = text[1:-1].strip()
+    text = _SOURCES_RE.sub("", text).strip()
+    if len(text) > 1 and text[0] in "\"\u201c" and text[-1] in "\"\u201d":
+        text = text[1:-1].strip()
+    return text
+
+
+def vet_draft(draft: str, ctx: "DraftContext") -> tuple[str, str]:
+    """(tidied draft, refusal reason) — the reason is "" when the
+    draft may stand."""
+    text = _tidy_draft(draft)
+    if not text:
+        return text, "empty"
+    material = "\n".join([*ctx.findings, *ctx.must_include,
+                           ctx.action_prompt])
+    lowered_material = material.lower()
+    invented = _amounts(text) - _amounts(material)
+    if invented:
+        return text, "figure_not_in_findings"
+    for number in _LONG_NUMBER_RE.findall(text):
+        if number not in material:
+            return text, "number_not_in_findings"
+    for match in _PROMISE_RE.finditer(text):
+        if match.group(0).lower() not in lowered_material:
+            return text, "promise_not_in_findings"
+    lowered = text.lower()
+    for term in _FOREIGN_TERMS:
+        if term in lowered and term not in lowered_material:
+            return text, "term_not_in_findings"
+    return text, ""
 
 
 class OfflineLLM(_CallLedger):
@@ -346,7 +433,16 @@ class LiveLLM(_CallLedger):
         # drafting degrades, rules do not.
         text = self._guarded("decision", system, user)
         if text and text.strip():
-            return text.strip()
+            vetted, refusal = vet_draft(text, ctx)
+            if not refusal:
+                return vetted
+            # The call happened and is accounted; the draft simply
+            # doesn't stand. The refusal rides the call's record onto
+            # the audit trail, and the composer answers the turn.
+            if self._pending_calls:
+                self._pending_calls[-1]["vetting"] = refusal
+            log.warning("live draft refused",
+                        extra={"fields": {"reason": refusal}})
         return _offline_compose(ctx)
 
     def intent_hint(self, text: str) -> str | None:

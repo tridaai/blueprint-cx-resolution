@@ -97,6 +97,44 @@ _ACCOUNT_RE = re.compile(r"\b(NB-\d{4,})\b", re.IGNORECASE)
 _POSTCODE_RE = re.compile(r"(?<!\d)(\d{5})(?!\d)")
 _CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
+_DIGIT_WORDS = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2",
+                "three": "3", "four": "4", "five": "5", "six": "6",
+                "seven": "7", "eight": "8", "nine": "9"}
+_SPOKEN_DIGITS_RE = re.compile(
+    r"\b(?:(?:%s)[\s-]+){2,}(?:%s)\b" % (("|".join(_DIGIT_WORDS),) * 2),
+    re.IGNORECASE)
+_SPOKEN_PREFIX_RE = re.compile(
+    r"\b(?:n\.?\s*b\.?|en\s+bee)\s*(?:-|dash|hyphen)?\s*(?=\d)",
+    re.IGNORECASE)
+
+
+# Words that put the account in someone else's hands ("her account",
+# "on behalf of my mother"). Details offered like that are never
+# taken up unasked: kinship is not verification, and the holder's
+# code is not sent on a third party's say-so.
+_THIRD_PARTY_RE = re.compile(
+    r"\b(?:on behalf of|(?:her|his|their) (?:account|bill|balance|phone)|"
+    r"my (?:wife|husband|partner|mother|mum|mom|father|dad|son|"
+    r"daughter|brother|sister|friend|grandmother|grandfather|"
+    r"gran|nan)(?:'s)?|for (?:my|a) (?:wife|husband|partner|mother|"
+    r"mum|mom|father|dad|son|daughter|friend|relative))\b",
+    re.IGNORECASE)
+
+
+def _identity_text(text: str) -> str:
+    """The message as identity material is read from it: digits
+    said as words ("one zero zero one", as a voice transcript or a
+    careful typist gives them) become digits, and a spoken "N B
+    dash" becomes the NB- prefix. Only runs of three or more digit
+    words convert, so ordinary prose ("no one", "this one") is
+    left alone. The customer's own words are stored untouched —
+    this is the reading, not a rewrite."""
+    def _digits(match: re.Match) -> str:
+        words = re.findall(r"[a-z]+", match.group(0).lower())
+        return "".join(_DIGIT_WORDS[w] for w in words)
+    text = _SPOKEN_DIGITS_RE.sub(_digits, text)
+    return _SPOKEN_PREFIX_RE.sub("NB-", text)
+
 
 class TurnState(TypedDict, total=False):
     conv: Conversation
@@ -344,7 +382,41 @@ class Supervisor:
                 return "identity"
         if conv.pending_action is not None:
             return "confirm"
+        if self._volunteered_identity(state):
+            return "identity"
         return "route"
+
+    def _volunteered_identity(self, state: TurnState) -> bool:
+        """Identity material given without being asked for — the
+        account number and postcode together while unverified, or
+        the code alone while a code is out — is identity, whatever
+        desk the conversation is on. Without this, a customer the
+        care desk could not place would see their own details
+        logged as an unhandled request, turn after turn. The
+        request they made before is what resumes once verified."""
+        conv = state["conv"]
+        norm = _identity_text(state["text"])
+        if _THIRD_PARTY_RE.search(norm):
+            return False
+        if conv.identity_state == IdentityState.UNVERIFIED \
+                and _ACCOUNT_RE.search(norm) and _POSTCODE_RE.search(norm):
+            conv.specialist_state["awaiting"] = "details"
+            conv.specialist_state["volunteered"] = True
+            # The request to resume: one made earlier in the
+            # conversation, or — details and request in the same
+            # breath — this message itself.
+            last = conv.specialist_state.get("last_request")
+            if not last and not analyze(state["text"]).low_confidence:
+                last = state["text"]
+            if last:
+                conv.specialist_state["resume_text"] = last
+            return True
+        if conv.identity_state == IdentityState.VERIFYING \
+                and _CODE_RE.search(norm) and not _ACCOUNT_RE.search(norm):
+            conv.specialist_state["awaiting"] = "otp"
+            conv.specialist_state["volunteered"] = True
+            return True
+        return False
 
     def _identity_detour_stale(self, state: TurnState) -> bool:
         """The identity detour is stale when a procedure run is
@@ -360,40 +432,49 @@ class Supervisor:
         run = self.store.get_procedure_run(run_id)
         if run is None or run.state != "active":
             return False
-        return not (_ACCOUNT_RE.search(text) or _POSTCODE_RE.search(text)
-                    or _CODE_RE.search(text))
+        norm = _identity_text(text)
+        return not (_ACCOUNT_RE.search(norm) or _POSTCODE_RE.search(norm)
+                    or _CODE_RE.search(norm))
 
     # -- identity flow ------------------------------------------------------
+    def _begin_from_details(self, conv: Conversation,
+                            text: str) -> tuple[bool, Finding] | None:
+        """The first factors, read from a message: None when it does
+        not carry both an account number and a postcode; otherwise
+        whether they matched, with the line that says so (and, on a
+        match, the code issued)."""
+        norm = _identity_text(text)
+        acct_match = _ACCOUNT_RE.search(norm)
+        pc_match = _POSTCODE_RE.search(norm)
+        if not (acct_match and pc_match):
+            return None
+        ok, _key = id_mod.begin_verification(
+            conv, acct_match.group(1).upper(), pc_match.group(1), self.store)
+        if ok:
+            conv.specialist_state["awaiting"] = "otp"
+            self._audit(conv, "identity", {"event": "code_issued"})
+            return True, Finding(
+                topic="identity",
+                text=("Thank you — that matches. I've sent a one-time "
+                      "code to the contact on file; enter the 6-digit "
+                      "code here and we'll carry straight on."))
+        return False, Finding(
+            topic="identity",
+            text=("Those details don't match an account I can find. "
+                  "Check the account number (NB- followed by digits) "
+                  "and the postcode on the account, and try again."))
+
     def _identity(self, state: TurnState) -> TurnState:
         conv, text = state["conv"], state["text"]
         awaiting = conv.specialist_state.get("awaiting")
         findings: list[Finding] = []
 
         if awaiting == "details":
-            acct_match = _ACCOUNT_RE.search(text)
-            pc_match = _POSTCODE_RE.search(text)
-            if acct_match and pc_match:
-                ok, key = id_mod.begin_verification(
-                    conv, acct_match.group(1).upper(), pc_match.group(1), self.store)
-                if ok:
-                    conv.specialist_state["awaiting"] = "otp"
-                    self._audit(conv, "identity", {"event": "code_issued"})
-                    findings.append(Finding(
-                        topic="identity",
-                        text=("Thank you — that matches. I've sent a one-time "
-                              "code to the contact on file; enter the 6-digit "
-                              "code here and we'll carry straight on.")))
-                    state["result"] = SpecialistResult(
-                        specialist="supervisor", findings=findings, progress=True)
-                    state["next"] = "post"
-                    return state
-                findings.append(Finding(
-                    topic="identity",
-                    text=("Those details don't match an account I can find. "
-                          "Check the account number (NB- followed by digits) "
-                          "and the postcode on the account, and try again.")))
+            begun = self._begin_from_details(conv, text)
+            if begun is not None:
+                ok, finding = begun
                 state["result"] = SpecialistResult(
-                    specialist="supervisor", findings=findings, progress=False)
+                    specialist="supervisor", findings=[finding], progress=ok)
                 state["next"] = "post"
                 return state
             findings.append(Finding(
@@ -406,7 +487,7 @@ class Supervisor:
             return state
 
         # awaiting == "otp"
-        code_match = _CODE_RE.search(text)
+        code_match = _CODE_RE.search(_identity_text(text))
         if not code_match:
             state["result"] = SpecialistResult(
                 specialist="supervisor",
@@ -438,10 +519,53 @@ class Supervisor:
                     progress=True)
                 state["next"] = "post"
                 return state
+            volunteered = conv.specialist_state.pop("volunteered", False)
             resume_intent = conv.specialist_state.pop("resume_intent", None)
             if resume_intent:
                 conv.specialist_state["force_intent"] = resume_intent
-            resume_text = conv.specialist_state.pop("resume_text", "") or text
+            resume_text = conv.specialist_state.pop("resume_text", "")
+            run = self._active_run(conv) if volunteered else None
+            if run is not None:
+                # Verified mid-walk. The request that started the walk
+                # is not an answer to the step the walk is on, so it
+                # is never fed back in as one: it is read only for a
+                # known issue now that the postcode is known, and
+                # otherwise the walk picks up at the step it was on.
+                state["text"] = resume_text or text
+                known = self._known_issue(state) if resume_text else None
+                if known is not None:
+                    state["result"] = known
+                    state["next"] = "post"
+                    return state
+                proc = self.store.get_procedure_version(
+                    run.procedure_id, run.procedure_version) \
+                    or self.store.get_procedure(run.procedure_id)
+                step = next((st for st in (proc.steps if proc else [])
+                             if st.step_id == run.current_step_id), None)
+                back = (f" Back to where we were: {step.instruction}"
+                        if step is not None else "")
+                state["result"] = SpecialistResult(
+                    specialist="supervisor",
+                    findings=[Finding(
+                        topic="identity",
+                        text=f"Thank you — you're verified.{back}")],
+                    progress=True)
+                state["next"] = "post"
+                return state
+            if volunteered and not resume_text and not resume_intent:
+                # Verified on the customer's own initiative, with no
+                # request on file to pick back up: the code itself is
+                # not a request, so ask for one instead of routing it.
+                state["result"] = SpecialistResult(
+                    specialist="supervisor",
+                    findings=[Finding(
+                        topic="identity",
+                        text=("Thank you — you're verified. What can I "
+                              "help you with today?"))],
+                    progress=True)
+                state["next"] = "post"
+                return state
+            resume_text = resume_text or text
             state["text"] = resume_text
             state["next"] = "route"
             return state
@@ -509,6 +633,14 @@ class Supervisor:
             self.store, conv.account_number,
             exclude_conversation_id=conv.conversation_id)
         adopted_run_id = ""
+        if briefing.resumable_run_id and self._active_run(conv) is not None:
+            # This conversation is already walking a procedure of its
+            # own: the earlier run stays where it is, and the opening
+            # doesn't offer to resume it over the top of this one.
+            briefing.resumable_run_id = ""
+            briefing.lines = [line for line in briefing.lines
+                              if "the walk is saved where we left it"
+                              not in line]
         if briefing.resumable_run_id:
             run = self.store.get_procedure_run(briefing.resumable_run_id)
             if run is not None and run.state == "active":
@@ -533,6 +665,14 @@ class Supervisor:
             "open_items": len(briefing.open_items),
             "broken_promises": len(briefing.broken_promises),
             "resumable_run_id": adopted_run_id})
+
+    def _active_run(self, conv: Conversation):
+        """This conversation's live procedure run, or None."""
+        run_id = conv.specialist_state.get("technical", {}).get("run_id")
+        if not run_id:
+            return None
+        run = self.store.get_procedure_run(run_id)
+        return run if run is not None and run.state == "active" else None
 
     def _retention_case_for(self, pending):
         """The retention case a pending proposal belongs to, if
@@ -813,9 +953,17 @@ class Supervisor:
                         f"stays active until {effective}, and the "
                         "cancellation is recorded on your account.")
             resolved = True
-        elif record.status == "executed":
+        elif record.status == "executed" and pending.kind in (
+                ActionKind.APPLY_CREDIT, ActionKind.ACTIVATE_OFFER,
+                ActionKind.CHANGE_PLAN):
             text_out = (f"Done — {pending.summary}. It's recorded on your "
                         "account, and you'll see it on your next bill.")
+            resolved = True
+        elif record.status == "executed":
+            # Nothing here touches a bill (a callback, an autopay
+            # setting, a card on file): no bill line is promised.
+            text_out = (f"Done — {pending.summary}. It's recorded on "
+                        "your account.")
             resolved = True
         else:
             text_out = ("I couldn't apply that after all — a final check at "
@@ -866,6 +1014,48 @@ class Supervisor:
                           if analysis.runner_up else None),
         }
         state["routing"] = record
+
+        # "Say the word and I'll …" from the last turn, answered with
+        # a plain yes: the desk that made the invitation takes the
+        # turn, told the yes is to its offer. The invitation lasts
+        # one turn only; anything else lets it lapse.
+        word = conv.specialist_state.pop("word_offer", None)
+        if word and word.get("turn") == conv.turns - 1 \
+                and classify_confirmation(text) == "confirm":
+            conv.specialist_state["word_accepted"] = word["desk"]
+            record["decision"] = "word_offer_accepted"
+            conv.intent = Intent(word["desk"])
+            self._change_desk(state, conv.intent, record)
+            state["next"] = "specialist"
+            return state
+
+        # A conversation is about the one account it verified. Asking
+        # after another account by number is answered plainly — that
+        # account's details are its holder's — never by quietly
+        # serving the verified account's own records instead.
+        if conv.account_number:
+            named = {m.upper() for m in _ACCOUNT_RE.findall(
+                _identity_text(text))}
+            if named - {conv.account_number.upper()}:
+                record["decision"] = "other_account_refused"
+                state["result"] = SpecialistResult(
+                    specialist="supervisor",
+                    findings=[Finding(
+                        topic="other_account",
+                        text=(f"I can only help with {conv.account_number}, "
+                              "the account verified in this conversation. "
+                              "Another account's details are shared only "
+                              "with its own holder, once they verify in "
+                              "a conversation of their own. Is there "
+                              f"anything on {conv.account_number} I can "
+                              "help with?"))],
+                    progress=True)
+                state["next"] = "post"
+                return state
+
+        if not analysis.low_confidence:
+            # The request a later, volunteered verification resumes.
+            conv.specialist_state["last_request"] = text
 
         # An open clarification is answered before anything else
         # routes. A reply that picks one of the two readings
@@ -1101,7 +1291,19 @@ class Supervisor:
                         text="Enter the 6-digit code I sent to the contact on file."))
                 else:
                     conv.specialist_state["awaiting"] = "details"
-                    if result.needs_verification:
+                    begun = (self._begin_from_details(conv, state["text"])
+                             if conv.identity_state == IdentityState.UNVERIFIED
+                             and not _THIRD_PARTY_RE.search(state["text"])
+                             else None)
+                    if begun is not None:
+                        # The details came with the request itself
+                        # (an email, above all, arrives whole): the
+                        # ask they answer is dropped and the code
+                        # goes out now.
+                        result.findings = [
+                            f for f in result.findings
+                            if f.topic != "identity"] + [begun[1]]
+                    elif result.needs_verification:
                         # The desk names the gate; the ask for the
                         # first half of it is the supervisor's, or
                         # the customer is left with nothing to do.
@@ -1150,6 +1352,7 @@ class Supervisor:
         self._bookkeep_progress(conv, result)
         if result.resolved:
             conv.status = "resolved"
+            conv.specialist_state.pop("last_request", None)
         if conv.no_progress_turns >= self.policy.max_no_progress_turns \
                 and not result.resolved:
             state["decision"] = esc_mod.EscalationDecision(

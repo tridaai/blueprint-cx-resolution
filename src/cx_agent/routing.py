@@ -32,6 +32,21 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("statement", 2), ("credit my account", 3), ("dispute", 3),
         ("wrong charge", 4), ("balance", 1), ("how much do i owe", 3),
         ("itemised", 2), ("itemized", 2),
+        ("what's my balance", 4), ("whats my balance", 4),
+        ("what is my balance", 4), ("check my balance", 4),
+        ("what do i owe", 3), ("due date", 3),
+        # Asking for something back for a poor experience is the
+        # billing desk's goodwill path, not an unhandled intent.
+        ("compensation", 4), ("compensate", 4), ("goodwill", 4),
+        ("credit on my account", 3), ("poor service", 3),
+        # A disputed roaming charge is a bill line to decide, so it
+        # belongs to the billing desk's dispute machinery — scored
+        # to beat the roaming desk's own words, which would price a
+        # new trip instead.
+        ("roaming charge", 5), ("charged for roaming", 5),
+        ("charged extra", 4), ("charged a fortune", 4),
+        ("nobody warned", 4), ("no one warned", 4),
+        ("never warned", 4), ("wasn't warned", 4),
     ],
     Intent.ROAMING: [
         ("roaming", 4), ("roam", 3), ("abroad", 3), ("travel", 2),
@@ -233,6 +248,14 @@ def resolve_clarification(text: str, options: list[Intent]) -> Intent | None:
                    for w in _ANSWER_WORDS.get(intent, []))]
     if len(hits) == 1:
         return hits[0]
+    # The question numbers its readings, so a customer may answer
+    # with the number alone ("2", "option 1", "the second one").
+    pick = re.fullmatch(
+        r"\s*(?:option\s*|number\s*|the\s*)?\(?(1|2|one|two|first|second)\)?"
+        r"(?:\s*one)?\s*[.!]?\s*", lowered)
+    if pick:
+        index = 0 if pick.group(1) in ("1", "one", "first") else 1
+        return options[index]
     return None
 
 

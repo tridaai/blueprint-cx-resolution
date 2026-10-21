@@ -91,6 +91,11 @@ _VULNERABLE_STATEMENTS: dict[str, list[str]] = {
 _HUMAN_PATTERNS = [
     r"\b(human|person|agent|representative|rep|someone real|real person|manager|supervisor|operator)\b",
 ]
+_HUMAN_WORDS = {"human", "person", "agent", "representative", "rep",
+                "someone", "manager", "supervisor", "operator"}
+_BARE_FILLER = {"a", "an", "the", "real", "live", "actual", "proper",
+                "please", "now", "just", "i", "want", "need", "need a",
+                "right", "away", "asap", "ok", "okay"}
 _HUMAN_FRAMING = [
     r"\b(speak|talk|chat) (to|with)\b",
     r"\bconnect me\b",
@@ -140,5 +145,10 @@ def screen(text: str) -> Screening:
             break
     asks = _hits(_HUMAN_PATTERNS, lowered, "human", out.matched)
     framed = any(re.search(p, lowered) for p in _HUMAN_FRAMING)
-    out.asks_for_human = bool(asks and framed)
+    # A bare ask ("human now", "agent please", "a real person")
+    # carries no framing verb: the message is the ask when, filler
+    # aside, a person is all it names.
+    words = set(re.findall(r"[a-z']+", lowered))
+    bare = bool(words) and words <= (_HUMAN_WORDS | _BARE_FILLER)
+    out.asks_for_human = bool(asks and (framed or bare))
     return out

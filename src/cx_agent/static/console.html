@@ -593,9 +593,9 @@ async function refresh() {
     }
   }
   const rep = await api("/attribution/report");
-  const rbox = document.getElementById("attribution");
+  const attrBox = document.getElementById("attribution");
   if (!rep.current.total && !rep.previous.total) {
-    rbox.innerHTML = '<p class="empty">No attributions yet. Run the pass over closed conversations; each record names the outcome, the one primary cause, and the rule that fired.</p>';
+    attrBox.innerHTML = '<p class="empty">No attributions yet. Run the pass over closed conversations; each record names the outcome, the one primary cause, and the rule that fired.</p>';
   } else {
     let html = '<p class="empty">Window: last ' + rep.window_days + ' days — ' +
       rep.current.total + ' attributed (previous window ' + rep.previous.total + '). ' +
@@ -614,7 +614,7 @@ async function refresh() {
         ' · other cause ' + j.other_cause +
         ' · unattributed ' + j.unattributed + '.</p>';
     }
-    rbox.innerHTML = html;
+    attrBox.innerHTML = html;
   }
   const agr = await api("/annotations/agreement");
   const agbox = document.getElementById("annotation-agreement");
@@ -672,9 +672,9 @@ async function refresh() {
     sbox.innerHTML = html;
   }
   const cst = await api("/costs/report");
-  const cbox = document.getElementById("costs");
+  const costBox = document.getElementById("costs");
   if (!cst.overall.calls) {
-    cbox.innerHTML = '<p class="empty">No model calls recorded yet. Every model call the supervisor makes is a record — its kind (decision or advisory), its tokens (measured where the provider reported them, estimated otherwise), its outcome and its latency — and this report folds those records.</p>';
+    costBox.innerHTML = '<p class="empty">No model calls recorded yet. Every model call the supervisor makes is a record — its kind (decision or advisory), its tokens (measured where the provider reported them, estimated otherwise), its outcome and its latency — and this report folds those records.</p>';
   } else {
     const o = cst.overall;
     let html = '<p class="empty">' + o.calls + ' model call(s) · ' + o.tokens +
@@ -692,12 +692,12 @@ async function refresh() {
       cst.caps.max_decision_calls_per_conversation + ' decision calls / ' +
       cst.caps.max_estimated_tokens_per_conversation + ' tokens per conversation, ' +
       cst.caps.model_call_timeout_seconds + 's per call.</p>';
-    cbox.innerHTML = html;
+    costBox.innerHTML = html;
   }
   const q = await api("/quality/digests");
-  const qbox = document.getElementById("quality");
+  const qualityBox = document.getElementById("quality");
   if (!q.digests.length) {
-    qbox.innerHTML = '<p class="empty">No digest yet. The daily pass composes one day\'s closed conversations — volume, causes, signals, the complaint book at day end, mining candidates, and a regression spot-check against the committed eval baseline — into a stored snapshot. It informs the team; it triggers nothing.</p>';
+    qualityBox.innerHTML = '<p class="empty">No digest yet. The daily pass composes one day\'s closed conversations — volume, causes, signals, the complaint book at day end, mining candidates, and a regression spot-check against the committed eval baseline — into a stored snapshot. It informs the team; it triggers nothing.</p>';
   } else {
     const d = q.digests[q.digests.length - 1];
     const causes = Object.keys(d.cause_mix);
@@ -714,14 +714,14 @@ async function refresh() {
     }
     html += '<p class="empty">Spot-check: ' + d.spot_check.summary + '</p>' +
       '<p class="empty"><a href="/quality/digests/' + d.date + '/markdown">Export this digest as markdown →</a></p>';
-    qbox.innerHTML = html;
+    qualityBox.innerHTML = html;
   }
   const trend = await api("/quality/trend");
-  const tbox = document.getElementById("quality-trend");
+  const trendBox = document.getElementById("quality-trend");
   if (!trend.trend.length) {
-    tbox.innerHTML = "";
+    trendBox.innerHTML = "";
   } else {
-    tbox.innerHTML = '<table class="attr"><tr><th>Date</th><th>Convs</th><th>Resolved</th>' +
+    trendBox.innerHTML = '<table class="attr"><tr><th>Date</th><th>Convs</th><th>Resolved</th>' +
       '<th>Top cause</th><th>Effort</th><th>Drift</th></tr>' +
       trend.trend.map(r => "<tr><td>" + r.date + "</td><td>" + r.conversations + "</td><td>" +
         (r.resolution_share === null ? "—" : Math.round(r.resolution_share * 100) + "%") +

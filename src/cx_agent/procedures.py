@@ -119,6 +119,16 @@ def _tool_coverage_ok(ctx, conv, run) -> tuple[str, Finding | None]:
                   "reported outage there and engineers are already on "
                   "it — the device steps may not bite until it's "
                   "cleared, but let's rule out the phone side too."))
+    if customer is None:
+        # No account on the conversation means no postcode to check:
+        # say so, rather than report a check that never ran. The
+        # walk goes on exactly as on a clear result.
+        return "clear", Finding(
+            topic="check",
+            text=("I can't check your area for outages until I know "
+                  "your account — if you'd like me to, tell me your "
+                  "account number (it starts NB-) and postcode. "
+                  "Meanwhile, let's work through the device side."))
     return "clear", Finding(
         topic="check",
         text=("I've checked coverage at your postcode: no outage is "
@@ -137,6 +147,14 @@ def _tool_allowance_ok(ctx, conv, run) -> tuple[str, Finding | None]:
                       "the end of the cycle on a limited plan, which "
                       "can slow things down — but let's rule out the "
                       "device side before we call it that."))
+    if account is None:
+        return "ok", Finding(
+            topic="check",
+            text=("I can't check your data allowance or your area for "
+                  "known issues until I know your account — if you'd "
+                  "like me to, tell me your account number (it starts "
+                  "NB-) and postcode. Meanwhile, let's try the quick "
+                  "fixes."))
     return "ok", Finding(
         topic="check",
         text=("I've checked your data allowance: that isn't what's "

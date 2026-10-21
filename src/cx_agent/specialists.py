@@ -281,13 +281,21 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
     bills = ctx.store.list_bills_for_account(conv.account_number)
     previous_bills = bills[:-1] if len(bills) > 1 else []
     lowered = text.lower()
-    dispute = any(w in lowered for w in (
+    # A "yes" to the explanation's own "say the word and I'll
+    # credit that back" is the dispute it invited (the supervisor
+    # routes that answer here and marks it).
+    accepted_offer = conv.specialist_state.pop("word_accepted", "") == "billing"
+    dispute = accepted_offer or any(w in lowered for w in (
         "dispute", "wrong", "shouldn't", "shouldnt", "charged twice",
         "refund", "fix it", "duplicate", "error", "charged after",
-        "not fair", "remove the charge"))
+        "not fair", "remove the charge", "charged extra",
+        "charged a fortune", "nobody warned", "no one warned",
+        "never warned", "wasn't warned"))
     unhappy = any(w in lowered for w in ("expensive", "too much", "goodwill",
                                          "unhappy", "loyal", "ridiculous",
-                                         "fed up"))
+                                         "fed up", "compensation",
+                                         "compensate", "awful", "terrible",
+                                         "poor service"))
     # Roaming lines are decided from the account's records (pass
     # windows, warnings given, unwarned ceiling crossings) as
     # well as the bill's own markers — one evidence read for the
@@ -405,6 +413,10 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
             topic="bill_flag",
             text=(f"One thing stands out: {'; '.join(evidence_items)}. "
                   "Say the word and I'll credit that back.")))
+        # The invitation is open for exactly the next turn: a plain
+        # yes then opens the dispute (see Supervisor._route).
+        conv.specialist_state["word_offer"] = {
+            "desk": "billing", "turn": conv.turns}
     return SpecialistResult(
         specialist="billing", findings=findings,
         citations=_cite(ctx, "billing", "itemised bill lines total due date"),
