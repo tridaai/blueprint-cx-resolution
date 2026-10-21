@@ -1101,6 +1101,15 @@ class Supervisor:
                         text="Enter the 6-digit code I sent to the contact on file."))
                 else:
                     conv.specialist_state["awaiting"] = "details"
+                    if result.needs_verification:
+                        # The desk names the gate; the ask for the
+                        # first half of it is the supervisor's, or
+                        # the customer is left with nothing to do.
+                        result.findings.append(Finding(
+                            topic="identity",
+                            text=("To start, tell me your account number "
+                                  "(it starts NB-) and the postcode on "
+                                  "the account.")))
             self._bookkeep_progress(conv, result)
             state["next"] = "compose"
             return state

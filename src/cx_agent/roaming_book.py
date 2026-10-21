@@ -111,7 +111,9 @@ class TripQuote:
     payg_cost: Decimal = ZERO
     pass_name: str = ""
     pass_price: Decimal = ZERO
-    pass_allowance_gb: Decimal = ZERO  # included across the trip
+    pass_days: int = 0  # trip days inside the pass window
+    pass_daily_gb: Decimal = ZERO  # the pass's daily allowance
+    pass_allowance_gb: Decimal = ZERO  # included across the pass window
     pass_overage_gb: Decimal = ZERO
     pass_overage_cost: Decimal = ZERO
     pass_cost: Decimal = ZERO  # price + overage, the honest pass total
@@ -151,10 +153,17 @@ def quote_trip(store, account: Account, destination: str, days: int,
     offer = _pass_offer(store, account)
     if offer is not None:
         per_day = offer.included_gb_per_day or ZERO
-        allowance = per_day * Decimal(days)
-        overage = max(ZERO, expected - allowance)
+        # The pass runs for its own window, not the trip's: days
+        # past it are pay-as-you-go, and allowance left unused
+        # inside the window doesn't carry over to them.
+        covered = min(days, offer.duration_days) if offer.duration_days else days
+        allowance = per_day * Decimal(covered)
+        overage = (max(ZERO, typical * Decimal(covered) - allowance)
+                   + typical * Decimal(days - covered))
         quote.pass_name = offer.name
         quote.pass_price = offer.one_off_price
+        quote.pass_days = covered
+        quote.pass_daily_gb = per_day
         quote.pass_allowance_gb = allowance
         quote.pass_overage_gb = overage
         quote.pass_overage_cost = money(overage * rate.per_gb)
@@ -240,7 +249,7 @@ def notice_summary(kind: str, progress: dict, projection: dict | None,
         lead = (f"Fair-use heads-up: you have used {gb(used)} roaming this "
                 f"trip — {num(pct)}% of the {gb(cap)} fair-use ceiling.")
     if projection is not None and projection["overage_cost"] > 0:
-        lead += (f" At the pace you're going ({num(projection["pace_per_day"])} "
+        lead += (f" At the pace you're going ({num(projection['pace_per_day'])} "
                  f"GB a day), you're projected to reach "
                  f"{gb(projection['projected_total_gb'])} over a "
                  f"{projection['window_days']}-day trip — about "

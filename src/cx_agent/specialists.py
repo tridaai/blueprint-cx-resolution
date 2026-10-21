@@ -377,7 +377,18 @@ def billing(conv: Conversation, text: str, ctx: Ctx) -> SpecialistResult:
         findings.append(Finding(
             topic="bill_summary",
             text=f"{summary_sentence} Here is what makes it up:"))
-    must_include = [f"{c.description}: {fmt(c.amount)}" for c in bill.charges]
+    # A line repeated word for word (a duplicate charge, above all)
+    # is marked, so the itemisation keeps every line: the reply
+    # guarantee de-duplicates identical text, and a dropped line
+    # would leave the items short of the total.
+    must_include = []
+    seen_lines: set[str] = set()
+    for c in bill.charges:
+        line = f"{c.description}: {fmt(c.amount)}"
+        if line in seen_lines:
+            line = f"{c.description} (charged again): {fmt(c.amount)}"
+        seen_lines.add(line)
+        must_include.append(line)
     for group in decompose_bill(bill):
         must_include.append(f"{group['label']} total: {fmt(group['total'])}")
     if previous_bills:
@@ -438,17 +449,24 @@ def _quote_text(quote) -> str:
     if not quote.has_pass:
         return (f"{text} The Roam Pass isn't available on your current "
                 "plan, so pay-as-you-go is the way to pay for this trip.")
+    daily = roaming_book.gb(quote.pass_daily_gb)
+    if quote.pass_days < quote.days:
+        window = (f"over its {quote.pass_days} days ({daily} a day), and "
+                  f"the other {quote.days - quote.pass_days} days of the "
+                  f"trip fall outside it")
+    else:
+        window = f"over the trip ({daily} a day)"
     if quote.pass_overage_gb > 0:
         text += (f" The {quote.pass_name} is {fmt(quote.pass_price)} and "
-                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} over "
-                 f"the trip (1 GB a day); the remaining "
+                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} "
+                 f"{window}; the remaining "
                  f"{roaming_book.gb(quote.pass_overage_gb)} at "
                  f"{fmt(quote.per_gb)}/GB adds {fmt(quote.pass_overage_cost)}, "
                  f"so {fmt(quote.pass_cost)} all-in.")
     else:
         text += (f" The {quote.pass_name} is {fmt(quote.pass_price)} and "
-                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} over "
-                 f"the trip (1 GB a day) — your whole expected usage fits "
+                 f"covers {roaming_book.gb(quote.pass_allowance_gb)} "
+                 f"{window} — your whole expected usage fits "
                  f"inside it, so {fmt(quote.pass_cost)} all-in.")
     if quote.cheaper == "pass":
         text += f" The pass is cheaper by {fmt(quote.saving)}."

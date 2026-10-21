@@ -73,7 +73,8 @@ _PHRASES: dict[Intent, list[tuple[str, int]]] = {
         ("behind on", 2), ("missed a payment", 3),
         ("make a payment", 4), ("pay the balance", 3),
         ("overpaid", 4), ("paid twice", 4), ("paid my bill twice", 5),
-        ("card on file", 3),
+        ("card on file", 3), ("replace my card", 4),
+        ("replacement card", 3),
         ("autopay", 4), ("auto pay", 4), ("arrangement", 3),
     ],
     Intent.CARE: [
