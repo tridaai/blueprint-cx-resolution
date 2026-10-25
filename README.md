@@ -27,7 +27,9 @@ confirmation, and a fresh policy check at the moment it runs.
 > Reference prototype. Not connected to any real carrier, billing
 > system, or customer.
 
-> **Work in progress** — this blueprint is built and passing its automated test and eval gates, but it has not yet finished hands-on local testing, and its companion blog post is not yet published. Expect changes. This notice comes off when both are done.
+<p><a href="https://trida.ai/blog/cx-resolution-agent-blueprint"><img src="https://geeytzpdwvjojoie.public.blob.vercel-storage.com/blog/1792756343489-cover.webp" alt="CX Resolution Agent Blueprint" width="600"></a></p>
+
+**Deep-dive:** [CX Resolution Agent Blueprint](https://trida.ai/blog/cx-resolution-agent-blueprint) — how the agent works, where it stops, and what the evals actually prove.
 
 ## Run it with a real model
 
